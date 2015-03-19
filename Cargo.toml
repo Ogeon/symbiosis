@@ -1,0 +1,11 @@
+[package]
+
+name = "symbiosis"
+version = "0.0.1"
+authors = ["Erik Hedvall <hello@erikhedvall.nu>"]
+
+[dependencies.html5ever]
+git = "https://github.com/servo/html5ever"
+
+[dependencies.string_cache]
+git = "https://github.com/servo/string-cache"
