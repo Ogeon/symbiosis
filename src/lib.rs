@@ -13,9 +13,17 @@ use std::collections::HashSet;
 use std::fmt;
 
 use html5ever::Attribute;
-use html5ever::tokenizer::{Tokenizer, TokenSink, Token, Tag, TagKind};
+use html5ever::tokenizer::{Tokenizer, TokenSink, Tag, TagKind};
+use html5ever::tokenizer::Token as HtmlToken;
 
 use string_cache::atom::Atom;
+
+use codegen::Token;
+
+use parser::Token as ParserToken;
+
+mod codegen;
+mod parser;
 
 pub fn parse_directory<'a, P: AsPath>(dir: P) -> Result<TemplateGroup<'a>, Error> {
     let directories = try!(read_dir(dir));
@@ -128,69 +136,50 @@ impl<'a> TemplateGroup<'a> {
 
 pub struct Template {
     parameters: HashSet<String>,
-    var_counter: u32,
-    element_stack: Vec<(String, Atom)>,
-    rust_render: String,
-    js_render: String
+    tokens: Vec<codegen::Token>
 }
 
 impl Template {
     fn new() -> Template {
         Template {
             parameters: HashSet::new(),
-            var_counter: 0,
-            element_stack: vec![],
-            rust_render: String::new(),
-            js_render: String::new()
+            tokens: vec![]
         }
     }
 
     fn open_tag(&mut self, name: Atom, attributes: Vec<Attribute>, self_closing: bool) {
-        let var = format!("{}_{}", to_valid_ident(name.as_slice()), self.var_counter);
-        self.var_counter += 1;
-
-        self.js_render.push_str(&format!("var {} = document.createElement(\"{}\");\n", var, name.as_slice()));
-        self.rust_render.push_str(&format!("try!(write!(writer, \"<{}\"));\n", name.as_slice()));
+        let void = is_void(name.as_slice());
+        self.tokens.push(Token::BeginTag(name));
 
         for attribute in attributes {
-            self.js_render.push_str(&format!("{}.setAttribute(\"{}\", \"{}\"):\n", var, attribute.name.local.as_slice(), attribute.value));
-            self.rust_render.push_str(&format!("try!(write!(writer, \" {}=\\\"{}\\\"\"));\n", attribute.name.local.as_slice(), attribute.value));
+            let mut content = parser::parse_content(&attribute.value).into_iter();
+            match content.next() {
+                Some(ParserToken::Text(text)) => self.tokens.push(Token::BeginAttribute(attribute.name.local, text)),
+                None => self.tokens.push(Token::BeginAttribute(attribute.name.local, "".to_string()))
+            }
+
+            for part in content {
+                match part {
+                    ParserToken::Text(text) => self.tokens.push(Token::AppendToAttribute(text)),
+                }
+            }
+
+            self.tokens.push(Token::EndAttribute);
         }
 
-        self.rust_render.push_str("try!(write!(writer, \">\"));\n");
-
-        if self_closing || is_void(name.as_slice()) {
-            self.append_child(&var);
-        } else {
-            self.element_stack.push((var, name));
-        }
+        self.tokens.push(Token::EndTag(void || self_closing));
     }
 
     fn add_text(&mut self, text: String) {
-        if let Some(&(ref element, _)) = self.element_stack.last() {
-            self.js_render.push_str(&format!("{}.appendChild(document.createTextNode(\"{}\"));\n", element, text));
-        } else {
-            self.js_render.push_str(&format!("root.appendChild(document.createTextNode(\"{}\"));\n", text));
-        }
-        self.rust_render.push_str(&format!("try!(write!(writer, \"{}\"));\n", text));
-    }
-
-    fn close_tag(&mut self) {
-        if let Some((element, tag)) = self.element_stack.pop() {
-            self.append_child(&element);
-            self.rust_render.push_str(&format!("try!(write!(writer, \"</{}>\"));\n", tag.as_slice()));
-        }
-    }
-
-    fn append_child(&mut self, child: &str) {
-        match self.element_stack.last() {
-            Some(&(ref parent, _)) => {
-                self.js_render.push_str(&format!("{}.appendChild({});\n", parent, child));
-            },
-            None => {
-                self.js_render.push_str(&format!("root.appendChild({});\n", child));
+        for part in parser::parse_content(&text) {
+            match part {
+                ParserToken::Text(text) => self.tokens.push(Token::AddText(text)),
             }
         }
+    }
+
+    fn close_tag(&mut self, tag: Atom) {
+        self.tokens.push(Token::CloseTag(tag));
     }
 
     ///Write a Rust template and define it as `name`. The template will be
@@ -200,7 +189,7 @@ impl Template {
             try!(write!(writer, "pub "));
         }
 
-        if self.parameters.len() > 0 {
+        let lifetime = if self.parameters.len() > 0 {
             try!(write!(writer, "struct {}<'a> {{\n", name));
 
             for parameter in &self.parameters {
@@ -208,17 +197,13 @@ impl Template {
             }
 
             try!(write!(writer, "}}\n\n"));
-            try!(write!(writer, "impl<'a> {}<'a> {{\n", name));
+            Some("'a")
         } else {
             try!(write!(writer, "struct {};\n\n", name));
-            try!(write!(writer, "impl {} {{\n", name));
-        }
+            None
+        };
 
-        try!(write!(writer, "    pub fn render_to<W: ::std::io::Write>(&self, writer: &mut W) -> ::std::io::Result<()> {{\n"));
-        try!(writer.write_all(self.rust_render.as_bytes()));
-        try!(write!(writer, "    Ok(())\n"));
-        try!(write!(writer, "    }}\n\n"));
-        write!(writer, "}}\n\n")
+        codegen::build_rust(writer, name, lifetime, &self.tokens)
     }
 
     ///Write a Javascript template and define it as `name`. The template will
@@ -234,35 +219,29 @@ impl Template {
             try!(write!(writer, "    this.{} = \"\";\n", parameter));
         }
 
-        try!(write!(writer, "}}\n\n"));
-        try!(write!(writer, "{}.prototype.render_to = function(root) {{\n", name));
-        try!(writer.write_all(self.js_render.as_bytes()));
-        write!(writer, "}}\n\n")
+        try!(write!(writer, "}};\n\n"));
+        codegen::build_js(writer, name, &self.tokens)
     }
 }
 
 impl TokenSink for Template {
-    fn process_token(&mut self, token: Token) {
+    fn process_token(&mut self, token: HtmlToken) {
         match token {
-            Token::TagToken(Tag {
+            HtmlToken::TagToken(Tag {
                 kind: TagKind::StartTag,
                 name,
                 attrs,
                 self_closing
             }) => self.open_tag(name, attrs, self_closing),
-            Token::TagToken(Tag {
+            HtmlToken::TagToken(Tag {
                 kind: TagKind::EndTag,
-                //name,
+                name,
                 ..
-            }) => self.close_tag(),
-            Token::CharacterTokens(text) => self.add_text(text),
+            }) => self.close_tag(name),
+            HtmlToken::CharacterTokens(text) => self.add_text(text),
             _ => {}
         }
     }
-}
-
-fn to_valid_ident(name: &str) -> String {
-    name.chars().map(|c| if !c.is_alphanumeric() { '_' } else { c }).collect()
 }
 
 // http://www.w3.org/TR/html5/syntax.html#void-elements
