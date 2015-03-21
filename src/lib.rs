@@ -18,7 +18,7 @@ use html5ever::tokenizer::Token as HtmlToken;
 
 use string_cache::atom::Atom;
 
-use codegen::Token;
+use codegen::{Token, Content};
 
 use parser::Token as ParserToken;
 
@@ -154,13 +154,21 @@ impl Template {
         for attribute in attributes {
             let mut content = parser::parse_content(&attribute.value).into_iter();
             match content.next() {
-                Some(ParserToken::Text(text)) => self.tokens.push(Token::BeginAttribute(attribute.name.local, text)),
-                None => self.tokens.push(Token::BeginAttribute(attribute.name.local, "".to_string()))
+                Some(ParserToken::Text(text)) => self.tokens.push(Token::BeginAttribute(attribute.name.local, Content::String(text))),
+                Some(ParserToken::Placeholder(name)) => {
+                    self.parameters.insert(name.clone());
+                    self.tokens.push(Token::BeginAttribute(attribute.name.local, Content::Placeholder(name)));
+                },
+                None => self.tokens.push(Token::BeginAttribute(attribute.name.local, Content::String(String::new())))
             }
 
             for part in content {
                 match part {
-                    ParserToken::Text(text) => self.tokens.push(Token::AppendToAttribute(text)),
+                    ParserToken::Text(text) => self.tokens.push(Token::AppendToAttribute(Content::String(text))),
+                    ParserToken::Placeholder(name) => {
+                        self.parameters.insert(name.clone());
+                        self.tokens.push(Token::AppendToAttribute(Content::Placeholder(name)));
+                    }
                 }
             }
 
@@ -171,11 +179,26 @@ impl Template {
     }
 
     fn add_text(&mut self, text: String) {
-        for part in parser::parse_content(&text) {
+        let mut content = parser::parse_content(&text).into_iter();
+        match content.next() {
+            Some(ParserToken::Text(text)) => self.tokens.push(Token::BeginText(Content::String(text))),
+            Some(ParserToken::Placeholder(name)) => {
+                self.parameters.insert(name.clone());
+                self.tokens.push(Token::BeginText(Content::Placeholder(name)));
+            },
+            None => return
+        }
+
+        for part in content {
             match part {
-                ParserToken::Text(text) => self.tokens.push(Token::AddText(text)),
+                ParserToken::Text(text) => self.tokens.push(Token::AppendToText(Content::String(text))),
+                ParserToken::Placeholder(name) => {
+                    self.parameters.insert(name.clone());
+                    self.tokens.push(Token::AppendToText(Content::Placeholder(name)));
+                }
             }
         }
+        self.tokens.push(Token::EndText);
     }
 
     fn close_tag(&mut self, tag: Atom) {
@@ -216,7 +239,7 @@ impl Template {
         try!(write!(writer, "{} = function() {{\n", name));
 
         for parameter in &self.parameters {
-            try!(write!(writer, "    this.{} = \"\";\n", parameter));
+            try!(write!(writer, "    this.{} = null;\n", parameter));
         }
 
         try!(write!(writer, "}};\n\n"));
