@@ -18,36 +18,14 @@ use html5ever::tokenizer::Token as HtmlToken;
 
 use string_cache::atom::Atom;
 
-use codegen::{Token, Content};
+pub use codegen::{JavaScript, JsVarState, Rust, RustVisibility};
+
+use codegen::{Token, Content, Codegen};
 
 use parser::Token as ParserToken;
 
-mod codegen;
+pub mod codegen;
 mod parser;
-
-pub fn parse_directory<'a, P: AsPath>(dir: P) -> Result<TemplateGroup<'a>, Error> {
-    let directories = try!(read_dir(dir));
-    let mut parser = TemplateGroup::new();
-
-    for directory in directories {
-        let directory = try!(directory).path();
-        if let Some(name) = directory.file_stem() {
-            if let Some(name) = name.to_str() {
-                let mut source = String::new();
-                try!(File::open(&directory).and_then(|mut f| f.read_to_string(&mut source)));
-                try!(parser.add_template(name.to_string(), source));
-            }
-        }
-    }
-
-    Ok(parser)
-}
-
-pub fn parse_string(source: String) -> Result<Template, Error> {
-    let mut tokenizer = Tokenizer::new(Template::new(), Default::default());
-    tokenizer.feed(source);
-    Ok(tokenizer.unwrap())
-}
 
 #[derive(Debug)]
 pub enum Error {
@@ -81,70 +59,104 @@ impl fmt::Display for Error {
 }
 
 ///A collection of templates.
-pub struct TemplateGroup<'a> {
-    templates: Vec<(String, Template)>,
-    namespace: Option<&'a str>,
-    ns_predefined: bool
+pub struct TemplateGroup {
+    templates: Vec<ParsedTemplate>
 }
 
-impl<'a> TemplateGroup<'a> {
-    pub fn new() -> TemplateGroup<'a> {
+impl TemplateGroup {
+    pub fn new() -> TemplateGroup {
         TemplateGroup {
-            templates: vec![],
-            namespace: None,
-            ns_predefined: false
+            templates: vec![]
         }
     }
 
-    ///Set the name of the namespace where the Javascript templates should be
-    ///defined. Set `predefined` to true if it was defined somewhere else.
-    pub fn js_namespace(&mut self, namespace: &'a str, predefined: bool) {
-        self.namespace = Some(namespace);
-        self.ns_predefined = predefined;
-    }
+    ///Add a template from a string.
+    pub fn parse_string(&mut self, name: String, source: String) -> Result<(), Error> {
+        let mut template = Template::new();
+        try!(template.parse_string(source));
+        self.templates.push(ParsedTemplate {
+            name: name,
+            parameters: template.parameters,
+            tokens: template.tokens
+        });
 
-    pub fn add_template(&mut self, name: String, source: String) -> Result<(), Error> {
-        let template = try!(parse_string(source));
-        self.templates.push((name, template));
         Ok(())
     }
 
-    pub fn emit_rust<W: Write>(&self, writer: &mut W) -> io::Result<()> {
-        for &(ref name, ref template) in &self.templates {
-            try!(template.emit_rust(true, name, writer));
-        }
-        Ok(())
-    }
+    ///Add every `*.html` and `*.htm` file in a directory to the template group.
+    pub fn parse_directory<P: AsPath>(&mut self, dir: P) -> Result<(), Error> {
+        let directory = try!(read_dir(dir));
 
-    pub fn emit_js<W: Write>(&self, writer: &mut W) -> io::Result<()> {
-        if let Some(ref namespace) = self.namespace {
-            if !self.ns_predefined {
-                try!(write!(writer, "var {} = {{}};\n", namespace));
+        for path in directory {
+            let path = try!(path).path();
+            let info = (
+                path.file_stem().and_then(|n| n.to_str()),
+                path.extension().and_then(|e| e.to_str())
+            );
+            if let (Some(name), Some(ext)) = info {
+                if ext == "html" || ext == "htm" {
+                    let mut source = String::new();
+                    try!(File::open(&path).and_then(|mut f| f.read_to_string(&mut source)));
+                    try!(self.parse_string(name.to_string(), source));
+                }
             }
         }
 
-        for &(ref name, ref template) in &self.templates {
-            if let Some(namespace) = self.namespace {
-                try!(template.emit_js(false, &format!("{}.{}", namespace, name), writer));
-            } else {
-                try!(template.emit_js(true, name, writer));
-            }
-        }
         Ok(())
+    }
+
+    ///Add an already parsed template to the group.
+    pub fn add_template(&mut self, name: String, template: Template) {
+        self.templates.push(ParsedTemplate {
+            name: name,
+            parameters: template.parameters,
+            tokens: template.tokens
+        });
+    }
+
+    ///Write template code.
+    pub fn emit_code<W: Write, C: Codegen>(&self, writer: &mut W, codegen: &C) -> io::Result<()> {
+        codegen.build_module(writer, |w, indent| {
+            for template in &self.templates {
+                try!(codegen.build_template(w, &template.name, indent, &template.parameters, &template.tokens));
+            }
+            Ok(())
+        })
     }
 }
 
+struct ParsedTemplate {
+    name: String,
+    parameters: HashSet<String>,
+    tokens: Vec<codegen::Token>
+}
+
+///A single template.
 pub struct Template {
     parameters: HashSet<String>,
     tokens: Vec<codegen::Token>
 }
 
 impl Template {
-    fn new() -> Template {
+    ///Create an empty template.
+    pub fn new() -> Template {
         Template {
             parameters: HashSet::new(),
             tokens: vec![]
         }
+    }
+
+    ///Add content from a string to the template.
+    pub fn parse_string(&mut self, source: String) -> Result<(), Error> {
+        let mut tokenizer = Tokenizer::new(self, Default::default());
+        tokenizer.feed(source);
+
+        Ok(())
+    }
+
+    ///Write template code.
+    pub fn emit_code<W: Write, C: Codegen>(&self, template_name: &str, writer: &mut W, codegen: &C) -> io::Result<()> {
+        codegen.build_template(writer, template_name, 0, &self.parameters, &self.tokens)
     }
 
     fn open_tag(&mut self, name: Atom, attributes: Vec<Attribute>, self_closing: bool) {
@@ -204,50 +216,9 @@ impl Template {
     fn close_tag(&mut self, tag: Atom) {
         self.tokens.push(Token::CloseTag(tag));
     }
-
-    ///Write a Rust template and define it as `name`. The template will be
-    ///prefixed with `pub` if `public` is true.
-    pub fn emit_rust<W: Write>(&self, public: bool, name: &str, writer: &mut W) -> io::Result<()> {
-        if public {
-            try!(write!(writer, "pub "));
-        }
-
-        let lifetime = if self.parameters.len() > 0 {
-            try!(write!(writer, "struct {}<'a> {{\n", name));
-
-            for parameter in &self.parameters {
-                try!(write!(writer, "    pub {}: Option<&'a str>,\n", parameter));
-            }
-
-            try!(write!(writer, "}}\n\n"));
-            Some("'a")
-        } else {
-            try!(write!(writer, "struct {};\n\n", name));
-            None
-        };
-
-        codegen::build_rust(writer, name, lifetime, &self.tokens)
-    }
-
-    ///Write a Javascript template and define it as `name`. The template will
-    ///be prefixed with `var` if `local` is true.
-    pub fn emit_js<W: Write>(&self, local: bool, name: &str, writer: &mut W) -> io::Result<()> {
-        if local {
-            try!(write!(writer, "var "));
-        }
-
-        try!(write!(writer, "{} = function() {{\n", name));
-
-        for parameter in &self.parameters {
-            try!(write!(writer, "    this.{} = null;\n", parameter));
-        }
-
-        try!(write!(writer, "}};\n\n"));
-        codegen::build_js(writer, name, &self.tokens)
-    }
 }
 
-impl TokenSink for Template {
+impl<'a> TokenSink for &'a mut Template {
     fn process_token(&mut self, token: HtmlToken) {
         match token {
             HtmlToken::TagToken(Tag {
