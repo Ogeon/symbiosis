@@ -1,4 +1,4 @@
 <div class="img-box">
 	<img src="{{url}}">
-	<p>A picture of a {{subject}}.</p>
+	{{ if(subject) }}<p>A picture of {{ subject }}.</p>{{ end }}
 </div>

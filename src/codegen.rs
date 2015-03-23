@@ -1,13 +1,17 @@
 use std::io::{self, Write};
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::default::Default;
 
 use string_cache::atom::Atom;
 
+///Write an indented line of code.
+///
+///Example: `line!(writer, indent_steps, "var {} = this.{};", var_name, field_name);`.
+#[macro_export]
 macro_rules! line {
     ($writer:ident, $indent:expr, $($format:tt)*) => (
         {
-            try!(indent($writer, $indent));
+            try!($crate::codegen::write_indent($writer, $indent));
             try!(writeln!($writer, $($format)*));
         }
     )
@@ -17,7 +21,7 @@ macro_rules! line {
 ///and they have to implement this trait.
 pub trait Codegen {
     ///Generate code for a single template.
-    fn build_template<W: Write>(&self, w: &mut W, name: &str, indent: u8, params: &HashSet<String>, tokens: &[Token]) -> io::Result<()>;
+    fn build_template<W: Write>(&self, w: &mut W, name: &str, indent: u8, params: &HashMap<String, ContentType>, tokens: &[Token]) -> io::Result<()>;
 
     ///Generate code for a module or a similar collection containing multiple templates.
     fn build_module<W, F>(&self, w: &mut W, build_templates: F) -> io::Result<()> where
@@ -39,9 +43,56 @@ pub enum Token {
     BeginText(Content),
     AppendToText(Content),
     EndText,
+    Scope(Scope),
+    End,
+}
 
-    If(String),
-    EndIf,
+///Representation of supported scope types.
+pub enum Scope {
+    ///Everything within an `if` scope will be hidden if the provided logic
+    ///expression is false.
+    If(Logic)
+}
+
+///Logic expressions.
+pub enum Logic {
+    ///a and b and ...
+    And(Vec<Logic>),
+    ///a or b or ...
+    Or(Vec<Logic>),
+    ///The logical inverse of an expression.
+    Not(Box<Logic>),
+    ///A value from a template parameter.
+    Value(String)
+}
+
+impl Logic {
+    pub fn parameters<F: FnMut(&String)>(&self, f: &mut F) {
+        match self {
+            &Logic::And(ref conds) => for cond in conds {
+                cond.parameters(f);
+            },
+            &Logic::Or(ref conds) => for cond in conds {
+                cond.parameters(f);
+            },
+            &Logic::Not(ref cond) => cond.parameters(f),
+            &Logic::Value(ref name) => f(name)
+        }
+    }
+
+    pub fn flattened(&self) -> Logic {
+        match self {
+            &Logic::And(ref conds) if conds.len() == 1 => conds.first().unwrap().flattened(),
+            &Logic::And(ref conds) => Logic::And(conds.iter().map(|c| c.flattened()).collect()),
+            &Logic::Or(ref conds) if conds.len() == 1 => conds.first().unwrap().flattened(),
+            &Logic::Or(ref conds) => Logic::Or(conds.iter().map(|c| c.flattened()).collect()),
+            &Logic::Not(ref cond) => match &**cond {
+                &Logic::Not(ref cond) => cond.flattened(),
+                other => Logic::Not(Box::new(other.flattened()))
+            },
+            &Logic::Value(ref name) => Logic::Value(name.clone())
+        }
+    }
 }
 
 ///Types of text content.
@@ -51,6 +102,16 @@ pub enum Content {
 
     ///Use content from a parameter in a placeholder.
     Placeholder(String)
+}
+
+///Types of template parameter content.
+pub enum ContentType {
+    ///A plain string.
+    String,
+    ///An optionally defined string.
+    OptionalString,
+    ///A boolean value.
+    Bool
 }
 
 ///Represents the state of a JavaScript variable.
@@ -76,6 +137,51 @@ pub struct JavaScript<'a> {
     pub namespace: Option<&'a str>
 }
 
+impl<'a> JavaScript<'a> {
+    fn eval_logic<W: Write>(&self, w: &mut W, first: bool, cond: &Logic, params: &HashMap<String, ContentType>) -> io::Result<()> {
+        match cond {
+            &Logic::And(ref conds) => {
+                if !first {
+                    try!(write!(w, "("));
+                }
+                for (i, cond) in conds.iter().enumerate() {
+                    if i > 0 {
+                        try!(write!(w, " && "));
+                    }
+                    try!(self.eval_logic(w, false, cond, params));
+                }
+                if !first {
+                    try!(write!(w, ")"));
+                }
+            },
+            &Logic::Or(ref conds) => {
+                if !first {
+                    try!(write!(w, "("));
+                }
+                for (i, cond) in conds.iter().enumerate() {
+                    if i > 0 {
+                        try!(write!(w, " || "));
+                    }
+                    try!(self.eval_logic(w, false, cond, params));
+                }
+                if !first {
+                    try!(write!(w, ")"));
+                }
+            },
+            &Logic::Not(ref cond) => {
+                try!(write!(w, "!("));
+                try!(self.eval_logic(w, false, cond, params));
+                try!(write!(w, ")"));
+            },
+            &Logic::Value(ref val) => {
+                try!(write!(w, "this.{}", val));
+            }
+        }
+
+        Ok(())
+    }
+}
+
 impl<'a> Default for JavaScript<'a> {
     fn default() -> JavaScript<'a> {
         JavaScript {
@@ -86,7 +192,7 @@ impl<'a> Default for JavaScript<'a> {
 }
 
 impl<'a> Codegen for JavaScript<'a> {
-    fn build_template<W: Write>(&self, w: &mut W, name: &str, mut indent: u8, params: &HashSet<String>, tokens: &[Token]) -> io::Result<()> {
+    fn build_template<W: Write>(&self, w: &mut W, name: &str, mut indent: u8, params: &HashMap<String, ContentType>, tokens: &[Token]) -> io::Result<()> {
         if let Some(namespace) = self.namespace {
             line!(w, indent, "{}.{} = function() {{", namespace, name);
         } else {
@@ -96,8 +202,12 @@ impl<'a> Codegen for JavaScript<'a> {
             }
         }
 
-        for parameter in params {
-            line!(w, indent + 1, "this.{} = null;", parameter);
+        for (parameter, ty) in params {
+            match ty {
+                &ContentType::String => line!(w, indent + 1, "this.{} = \"\";", parameter),
+                &ContentType::OptionalString => line!(w, indent + 1, "this.{} = null;", parameter),
+                &ContentType::Bool => line!(w, indent + 1, "this.{} = false;", parameter),
+            }
         }
 
         line!(w, indent, "}};");
@@ -202,11 +312,14 @@ impl<'a> Codegen for JavaScript<'a> {
                         line!(w, indent, "root.appendChild(document.createTextNode({}));", text_var);
                     }
                 }
-                &Token::If(ref cond) => {
-                    line!(w, indent, "if({}) {{", cond);
+                &Token::Scope(Scope::If(ref cond)) => {
+                    try!(write_indent(w, indent));
+                    try!(write!(w, "if("));
+                    try!(self.eval_logic(w, true, &cond.flattened(), params));
+                    try!(write!(w, ") {{\n"));
                     indent += 1;
                 },
-                &Token::EndIf => {
+                &Token::End => {
                     indent -= 1;
                     line!(w, indent, "}}");
                 }
@@ -251,6 +364,56 @@ pub struct Rust<'a> {
     pub visibility: RustVisibility
 }
 
+impl<'a> Rust<'a> {
+    fn eval_logic<W: Write>(&self, w: &mut W, first: bool, cond: &Logic, params: &HashMap<String, ContentType>) -> io::Result<()> {
+        match cond {
+            &Logic::And(ref conds) => {
+                if !first {
+                    try!(write!(w, "("));
+                }
+                for (i, cond) in conds.iter().enumerate() {
+                    if i > 0 {
+                        try!(write!(w, " && "));
+                    }
+                    try!(self.eval_logic(w, false, cond, params));
+                }
+                if !first {
+                    try!(write!(w, ")"));
+                }
+            },
+            &Logic::Or(ref conds) => {
+                if !first {
+                    try!(write!(w, "("));
+                }
+                for (i, cond) in conds.iter().enumerate() {
+                    if i > 0 {
+                        try!(write!(w, " || "));
+                    }
+                    try!(self.eval_logic(w, false, cond, params));
+                }
+                if !first {
+                    try!(write!(w, ")"));
+                }
+            },
+            &Logic::Not(ref cond) => {
+                try!(write!(w, "!("));
+                try!(self.eval_logic(w, false, cond, params));
+                try!(write!(w, ")"));
+            },
+            &Logic::Value(ref val) => {
+                match params.get(val) {
+                    Some(&ContentType::String) => try!(write!(w, "true")),
+                    Some(&ContentType::OptionalString) => try!(write!(w, "self.{}.is_some()", val)),
+                    Some(&ContentType::Bool) => try!(write!(w, "self.{}", val)),
+                    None => {}
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
 impl<'a> Default for Rust<'a> {
     fn default() -> Rust<'a> {
         Rust {
@@ -261,7 +424,7 @@ impl<'a> Default for Rust<'a> {
 }
 
 impl<'a> Codegen for Rust<'a> {
-    fn build_template<W: Write>(&self, w: &mut W, name: &str, mut indent: u8, params: &HashSet<String>, tokens: &[Token]) -> io::Result<()> {
+    fn build_template<W: Write>(&self, w: &mut W, name: &str, mut indent: u8, params: &HashMap<String, ContentType>, tokens: &[Token]) -> io::Result<()> {
         let public = match (&self.visibility, &self.named_module) {
             (&RustVisibility::Public, _) => true,
             (_, &Some(_)) => true,
@@ -282,8 +445,12 @@ impl<'a> Codegen for Rust<'a> {
             }
         }
 
-        for parameter in params {
-            line!(w, indent + 1, "pub {}: Option<&'a str>,", parameter);
+        for (parameter, ty) in params {
+            match ty {
+                &ContentType::String => line!(w, indent + 1, "pub {}: &'a str,", parameter),
+                &ContentType::OptionalString => line!(w, indent + 1, "pub {}: Option<&'a str>,", parameter),
+                &ContentType::Bool => line!(w, indent + 1, "pub {}: bool,", parameter),
+            }
         }
         
         line!(w, indent, "}}");
@@ -306,35 +473,56 @@ impl<'a> Codegen for Rust<'a> {
                 &Token::BeginAttribute(ref name, ref content) => match content {
                     &Content::String(ref content) => line!(w, indent, "try!(write!(writer, \" {}=\\\"{}\"));", name.as_slice(), content),
                     &Content::Placeholder(ref placeholder) => {
-                        line!(w, indent, "try!(write!(writer, \" {}=\\\"\"));", name.as_slice());
-                        line!(w, indent, "if let Some(val) = self.{} {{", placeholder);
-                        line!(w, indent + 1, "try!(write!(writer, \"{{}}\", val));");
-                        line!(w, indent, "}}");
+                        match params.get(placeholder) {
+                            Some(&ContentType::String) => line!(w, indent, "try!(write!(writer, \" {}=\\\"{{}}\", self.{}));", name.as_slice(), placeholder),
+                            Some(&ContentType::OptionalString) => {
+                                line!(w, indent, "try!(write!(writer, \" {}=\\\"\"));", name.as_slice());
+                                line!(w, indent, "if let Some(val) = self.{} {{", placeholder);
+                                line!(w, indent + 1, "try!(write!(writer, \"{{}}\", val));");
+                                line!(w, indent, "}}");
+                            },
+                            _ => {}
+                        }
                     }
                 },
                 &Token::AppendToAttribute(ref content) => match content {
                     &Content::String(ref content) => line!(w, indent, "try!(write!(writer, \"{}\"));", content),
                     &Content::Placeholder(ref placeholder) => {
-                        line!(w, indent, "if let Some(val) = self.{} {{", placeholder);
-                        line!(w, indent + 1, "try!(write!(writer, \"{{}}\", val));");
-                        line!(w, indent, "}}");
+                        match params.get(placeholder) {
+                            Some(&ContentType::String) => line!(w, indent, "try!(write!(writer, \"{{}}\", self.{}));", placeholder),
+                            Some(&ContentType::OptionalString) => {
+                                line!(w, indent, "if let Some(val) = self.{} {{", placeholder);
+                                line!(w, indent + 1, "try!(write!(writer, \"{{}}\", val));");
+                                line!(w, indent, "}}");
+                            },
+                            _ => {}
+                        }
                     }
                 },
                 &Token::EndAttribute => line!(w, indent, "try!(write!(writer, \"\\\"\"));"),
                 &Token::BeginText(ref text) | &Token::AppendToText(ref text) => match text {
                     &Content::String(ref text) => line!(w, indent, "try!(write!(writer, \"{}\"));", text),
                     &Content::Placeholder(ref placeholder) => {
-                        line!(w, indent, "if let Some(val) = self.{} {{", placeholder);
-                        line!(w, indent + 1, "try!(write!(writer, \"{{}}\", val));");
-                        line!(w, indent, "}}");
+                        match params.get(placeholder) {
+                            Some(&ContentType::String) => line!(w, indent, "try!(write!(writer, \"{{}}\", self.{}));", placeholder),
+                            Some(&ContentType::OptionalString) => {
+                                line!(w, indent, "if let Some(val) = self.{} {{", placeholder);
+                                line!(w, indent + 1, "try!(write!(writer, \"{{}}\", val));");
+                                line!(w, indent, "}}");
+                            },
+                            _ => {}
+                        }
                     },
                 },
                 &Token::EndText => {},
-                &Token::If(ref cond) => {
-                    line!(w, indent, "if self.{} {{", cond);
+                &Token::Scope(Scope::If(ref cond)) => {
+                    try!(write_indent(w, indent));
+                    try!(write!(w, "if "));
+                    try!(self.eval_logic(w, true, &cond.flattened(), params));
+                    try!(write!(w, " {{\n"));
                     indent += 1;
                 },
-                &Token::EndIf => {
+                &Token::End => {
                     indent -= 1;
                     line!(w, indent, "}}");
                 }
@@ -375,8 +563,9 @@ impl<'a> Codegen for Rust<'a> {
     }
 }
 
+///Write `4 * steps` spaces.
 #[inline]
-fn indent<W: Write>(writer: &mut W, steps: u8) -> io::Result<()> {
+pub fn write_indent<W: Write>(writer: &mut W, steps: u8) -> io::Result<()> {
     for _ in 0..steps {
         try!(write!(writer, "    "));
     }

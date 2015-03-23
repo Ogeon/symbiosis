@@ -9,8 +9,10 @@ use std::io::{self, Read, Write};
 use std::error::FromError;
 use std::default::Default;
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::fmt;
+use std::mem::swap;
 
 use html5ever::Attribute;
 use html5ever::tokenizer::{Tokenizer, TokenSink, Tag, TagKind};
@@ -20,11 +22,13 @@ use string_cache::atom::Atom;
 
 pub use codegen::{JavaScript, JsVarState, Rust, RustVisibility};
 
-use codegen::{Token, Content, Codegen};
+use codegen::{Token, Content, Codegen, ContentType, Scope};
+use fragments::{Fragment, ReturnType};
 
-use parser::Token as ParserToken;
+use parser::ExtensibleMap;
 
 pub mod codegen;
+pub mod fragments;
 mod parser;
 
 #[derive(Debug)]
@@ -59,20 +63,22 @@ impl fmt::Display for Error {
 }
 
 ///A collection of templates.
-pub struct TemplateGroup {
-    templates: Vec<ParsedTemplate>
+pub struct TemplateGroup<'a> {
+    templates: Vec<ParsedTemplate>,
+    fragments: HashMap<&'static str, Box<Fragment + 'a>>
 }
 
-impl TemplateGroup {
-    pub fn new() -> TemplateGroup {
+impl<'a> TemplateGroup<'a> {
+    pub fn new() -> TemplateGroup<'a> {
         TemplateGroup {
-            templates: vec![]
+            templates: vec![],
+            fragments: init_fragments()
         }
     }
 
     ///Add a template from a string.
     pub fn parse_string(&mut self, name: String, source: String) -> Result<(), Error> {
-        let mut template = Template::new();
+        let mut template = Template::extending(&self.fragments);
         try!(template.parse_string(source));
         self.templates.push(ParsedTemplate {
             name: name,
@@ -114,6 +120,12 @@ impl TemplateGroup {
         });
     }
 
+    ///Register a custom fragment.
+    pub fn register_fragment<F: Fragment + 'a>(&mut self, fragment: F) {
+        let fragment = Box::new(fragment) as Box<Fragment>;
+        self.fragments.insert(fragment.identifier(), fragment);
+    }
+
     ///Write template code.
     pub fn emit_code<W: Write, C: Codegen>(&self, writer: &mut W, codegen: &C) -> io::Result<()> {
         codegen.build_module(writer, |w, indent| {
@@ -127,31 +139,58 @@ impl TemplateGroup {
 
 struct ParsedTemplate {
     name: String,
-    parameters: HashSet<String>,
+    parameters: HashMap<String, ContentType>,
     tokens: Vec<codegen::Token>
 }
 
 ///A single template.
-pub struct Template {
-    parameters: HashSet<String>,
-    tokens: Vec<codegen::Token>
+pub struct Template<'a> {
+    fragments: ExtensibleMap<'a, &'static str, Box<Fragment + 'a>>,
+    parameters: HashMap<String, ContentType>,
+    tokens: Vec<codegen::Token>,
+    errors: Vec<Cow<'static, str>>
 }
 
-impl Template {
+impl<'a> Template<'a> {
     ///Create an empty template.
-    pub fn new() -> Template {
+    pub fn new() -> Template<'a> {
         Template {
-            parameters: HashSet::new(),
-            tokens: vec![]
+            fragments: ExtensibleMap::Owned(init_fragments()),
+            parameters: HashMap::new(),
+            tokens: vec![],
+            errors: vec![]
+        }
+    }
+
+    fn extending(fragments: &'a HashMap<&'static str, Box<Fragment + 'a>>) -> Template<'a> {
+        Template {
+            fragments: ExtensibleMap::extend(fragments),
+            parameters: HashMap::new(),
+            tokens: vec![],
+            errors: vec![]
         }
     }
 
     ///Add content from a string to the template.
     pub fn parse_string(&mut self, source: String) -> Result<(), Error> {
-        let mut tokenizer = Tokenizer::new(self, Default::default());
-        tokenizer.feed(source);
+        {
+            let mut tokenizer = Tokenizer::new(&mut*self, Default::default());
+            tokenizer.feed(source);
+        }
 
-        Ok(())
+        if self.errors.len() > 0 {
+            let mut e = vec![];
+            swap(&mut e, &mut self.errors);
+            Err(Error::Parse(e))
+        } else {
+            Ok(())
+        }
+    }
+
+    ///Register a custom fragment.
+    pub fn register_fragment<F: Fragment + 'a>(&mut self, fragment: F) {
+        let fragment = Box::new(fragment) as Box<Fragment>;
+        self.fragments.insert(fragment.identifier(), fragment);
     }
 
     ///Write template code.
@@ -159,28 +198,40 @@ impl Template {
         codegen.build_template(writer, template_name, 0, &self.parameters, &self.tokens)
     }
 
-    fn open_tag(&mut self, name: Atom, attributes: Vec<Attribute>, self_closing: bool) {
+    fn open_tag(&mut self, name: Atom, attributes: Vec<Attribute>, self_closing: bool) -> Result<(), Cow<'static, str>> {
         let void = is_void(name.as_slice());
         self.tokens.push(Token::BeginTag(name));
 
         for attribute in attributes {
-            let mut content = parser::parse_content(&attribute.value).into_iter();
+            let mut content = try!(parser::parse_content(&attribute.value, &self.fragments)).into_iter();
             match content.next() {
-                Some(ParserToken::Text(text)) => self.tokens.push(Token::BeginAttribute(attribute.name.local, Content::String(text))),
-                Some(ParserToken::Placeholder(name)) => {
-                    self.parameters.insert(name.clone());
+                Some(ReturnType::Content(Content::String(text))) => self.tokens.push(Token::BeginAttribute(attribute.name.local, Content::String(text))),
+                Some(ReturnType::Content(Content::Placeholder(name))) => {
+                    self.reg_string(name.clone());
                     self.tokens.push(Token::BeginAttribute(attribute.name.local, Content::Placeholder(name)));
                 },
+                Some(ReturnType::Logic(_)) => return Err(Cow::Borrowed("logic can not be used as text")),
+                Some(ReturnType::Scope(scope)) => {
+                    self.reg_scope_vars(&scope);
+                    self.tokens.push(Token::Scope(scope));
+                },
+                Some(ReturnType::End) => self.tokens.push(Token::End),
                 None => self.tokens.push(Token::BeginAttribute(attribute.name.local, Content::String(String::new())))
             }
 
             for part in content {
                 match part {
-                    ParserToken::Text(text) => self.tokens.push(Token::AppendToAttribute(Content::String(text))),
-                    ParserToken::Placeholder(name) => {
-                        self.parameters.insert(name.clone());
+                    ReturnType::Content(Content::String(text)) => self.tokens.push(Token::AppendToAttribute(Content::String(text))),
+                    ReturnType::Content(Content::Placeholder(name)) => {
+                        self.reg_string(name.clone());
                         self.tokens.push(Token::AppendToAttribute(Content::Placeholder(name)));
-                    }
+                    },
+                    ReturnType::Logic(_) => return Err(Cow::Borrowed("logic can not be used as text")),
+                    ReturnType::Scope(scope) => {
+                        self.reg_scope_vars(&scope);
+                        self.tokens.push(Token::Scope(scope));
+                    },
+                    ReturnType::End => self.tokens.push(Token::End),
                 }
             }
 
@@ -188,37 +239,79 @@ impl Template {
         }
 
         self.tokens.push(Token::EndTag(void || self_closing));
+
+        Ok(())
     }
 
-    fn add_text(&mut self, text: String) {
-        let mut content = parser::parse_content(&text).into_iter();
+    fn add_text(&mut self, text: String) -> Result<(), Cow<'static, str>> {
+        let mut content = try!(parser::parse_content(&text, &self.fragments)).into_iter();
         match content.next() {
-            Some(ParserToken::Text(text)) => self.tokens.push(Token::BeginText(Content::String(text))),
-            Some(ParserToken::Placeholder(name)) => {
-                self.parameters.insert(name.clone());
+            Some(ReturnType::Content(Content::String(text))) => self.tokens.push(Token::BeginText(Content::String(text))),
+            Some(ReturnType::Content(Content::Placeholder(name))) => {
+                self.reg_string(name.clone());
                 self.tokens.push(Token::BeginText(Content::Placeholder(name)));
             },
-            None => return
+            Some(ReturnType::Logic(_)) => return Err(Cow::Borrowed("logic can not be used as text")),
+            Some(ReturnType::Scope(scope)) => {
+                self.reg_scope_vars(&scope);
+                self.tokens.push(Token::Scope(scope));
+            },
+            Some(ReturnType::End) => self.tokens.push(Token::End),
+            None => return Ok(())
         }
 
         for part in content {
             match part {
-                ParserToken::Text(text) => self.tokens.push(Token::AppendToText(Content::String(text))),
-                ParserToken::Placeholder(name) => {
-                    self.parameters.insert(name.clone());
+                ReturnType::Content(Content::String(text)) => self.tokens.push(Token::AppendToText(Content::String(text))),
+                ReturnType::Content(Content::Placeholder(name)) => {
+                    self.reg_string(name.clone());
                     self.tokens.push(Token::AppendToText(Content::Placeholder(name)));
-                }
+                },
+                ReturnType::Logic(_) => return Err(Cow::Borrowed("logic can not be used as text")),
+                ReturnType::Scope(scope) => {
+                    self.reg_scope_vars(&scope);
+                    self.tokens.push(Token::Scope(scope));
+                },
+                ReturnType::End => self.tokens.push(Token::End),
             }
         }
         self.tokens.push(Token::EndText);
+
+        Ok(())
     }
 
     fn close_tag(&mut self, tag: Atom) {
         self.tokens.push(Token::CloseTag(tag));
     }
+
+    fn reg_scope_vars(&mut self, scope: &Scope) {
+        match scope {
+            &Scope::If(ref logic) => logic.parameters(&mut |param| self.reg_bool(param.clone()))
+        }
+    }
+
+    fn reg_string(&mut self, param: String) {
+        match self.parameters.entry(param) {
+            Entry::Occupied(mut entry) => match entry.get_mut() {
+                &mut ContentType::String => {},
+                entry => *entry = ContentType::OptionalString
+            },
+            Entry::Vacant(entry) => { entry.insert(ContentType::String); },
+        }
+    }
+
+    fn reg_bool(&mut self, param: String) {
+        match self.parameters.entry(param) {
+            Entry::Occupied(mut entry) => match entry.get_mut() {
+                &mut ContentType::Bool => {},
+                entry => *entry = ContentType::OptionalString
+            },
+            Entry::Vacant(entry) => { entry.insert(ContentType::Bool); },
+        }
+    }
 }
 
-impl<'a> TokenSink for &'a mut Template {
+impl<'a, 'b: 'a> TokenSink for &'a mut Template<'b> {
     fn process_token(&mut self, token: HtmlToken) {
         match token {
             HtmlToken::TagToken(Tag {
@@ -226,13 +319,17 @@ impl<'a> TokenSink for &'a mut Template {
                 name,
                 attrs,
                 self_closing
-            }) => self.open_tag(name, attrs, self_closing),
+            }) => if let Err(e) = self.open_tag(name, attrs, self_closing) {
+                self.errors.push(e);
+            },
             HtmlToken::TagToken(Tag {
                 kind: TagKind::EndTag,
                 name,
                 ..
             }) => self.close_tag(name),
-            HtmlToken::CharacterTokens(text) => self.add_text(text),
+            HtmlToken::CharacterTokens(text) => if let Err(e) = self.add_text(text) {
+                self.errors.push(e);
+            },
             _ => {}
         }
     }
@@ -258,4 +355,22 @@ fn is_void(tag: &str) -> bool {
         "wbr" => true,
         _ => false
     }
+}
+
+fn init_fragments<'a>() -> HashMap<&'static str, Box<Fragment + 'a>> {
+    let mut map = HashMap::new();
+
+    let f = fragments::If;
+    map.insert(f.identifier(), Box::new(f) as Box<Fragment>);
+
+    let f = fragments::And;
+    map.insert(f.identifier(), Box::new(f) as Box<Fragment>);
+
+    let f = fragments::Or;
+    map.insert(f.identifier(), Box::new(f) as Box<Fragment>);
+
+    let f = fragments::Not;
+    map.insert(f.identifier(), Box::new(f) as Box<Fragment>);
+
+    map
 }
