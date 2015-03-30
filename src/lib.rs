@@ -1,9 +1,10 @@
-#![feature(std_misc)]
+#![feature(convert)]
 
 extern crate html5ever;
 extern crate string_cache;
 
-use std::path::AsPath;
+use std::convert::AsRef;
+use std::path::Path;
 use std::fs::{File, read_dir};
 use std::io::{self, Read, Write};
 use std::error::FromError;
@@ -90,7 +91,7 @@ impl<'a> TemplateGroup<'a> {
     }
 
     ///Add every `*.html` and `*.htm` file in a directory to the template group.
-    pub fn parse_directory<P: AsPath>(&mut self, dir: P) -> Result<(), Error> {
+    pub fn parse_directory<P: AsRef<Path>>(&mut self, dir: P) -> Result<(), Error> {
         let directory = try!(read_dir(dir));
 
         for path in directory {
@@ -122,7 +123,7 @@ impl<'a> TemplateGroup<'a> {
 
     ///Register a custom fragment.
     pub fn register_fragment<F: Fragment + 'a>(&mut self, fragment: F) {
-        let fragment = Box::new(fragment) as Box<Fragment>;
+        let fragment = Box::new(fragment);
         self.fragments.insert(fragment.identifier(), fragment);
     }
 
@@ -189,7 +190,7 @@ impl<'a> Template<'a> {
 
     ///Register a custom fragment.
     pub fn register_fragment<F: Fragment + 'a>(&mut self, fragment: F) {
-        let fragment = Box::new(fragment) as Box<Fragment>;
+        let fragment = Box::new(fragment);
         self.fragments.insert(fragment.identifier(), fragment);
     }
 
@@ -360,17 +361,17 @@ fn is_void(tag: &str) -> bool {
 fn init_fragments<'a>() -> HashMap<&'static str, Box<Fragment + 'a>> {
     let mut map = HashMap::new();
 
-    let f = fragments::If;
-    map.insert(f.identifier(), Box::new(f) as Box<Fragment>);
+    let f: Box<Fragment + 'a> = Box::new(fragments::If);
+    map.insert(f.identifier(), f);
 
     let f = fragments::And;
-    map.insert(f.identifier(), Box::new(f) as Box<Fragment>);
+    map.insert(f.identifier(), Box::new(f));
 
     let f = fragments::Or;
-    map.insert(f.identifier(), Box::new(f) as Box<Fragment>);
+    map.insert(f.identifier(), Box::new(f));
 
     let f = fragments::Not;
-    map.insert(f.identifier(), Box::new(f) as Box<Fragment>);
+    map.insert(f.identifier(), Box::new(f));
 
     map
 }
