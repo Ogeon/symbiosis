@@ -1,9 +1,12 @@
-use std::io::{self, Write};
+use std::io::Write;
 use std::collections::HashMap;
 use std::default::Default;
-use codegen::{Codegen, Logic, Token, Scope, ContentType, Content, write_indent};
 
 use string_cache::atom::Atom;
+
+use codegen::{Codegen, Logic, Token, Scope, ContentType, Content, write_indent};
+
+use Error;
 
 ///Represents the state of a JavaScript variable.
 pub enum VarState {
@@ -29,7 +32,7 @@ pub struct JavaScript<'a> {
 }
 
 impl<'a> JavaScript<'a> {
-    fn eval_logic<W: Write>(&self, w: &mut W, first: bool, cond: &Logic, params: &HashMap<String, ContentType>) -> io::Result<()> {
+    fn eval_logic<W: Write>(&self, w: &mut W, first: bool, cond: &Logic, params: &HashMap<String, ContentType>) -> Result<(), Error> {
         match cond {
             &Logic::And(ref conds) => {
                 if !first {
@@ -83,7 +86,7 @@ impl<'a> Default for JavaScript<'a> {
 }
 
 impl<'a> Codegen for JavaScript<'a> {
-    fn build_template<W: Write>(&self, w: &mut W, name: &str, mut indent: u8, params: &HashMap<String, ContentType>, tokens: &[Token]) -> io::Result<()> {
+    fn build_template<W: Write>(&self, w: &mut W, name: &str, mut indent: u8, params: &HashMap<String, ContentType>, tokens: &[Token]) -> Result<(), Error> {
         if let Some(namespace) = self.namespace {
             line!(w, indent, "{}.{} = function() {{", namespace, name);
         } else {
@@ -223,9 +226,9 @@ impl<'a> Codegen for JavaScript<'a> {
         Ok(())
     }
 
-    fn build_module<W, F>(&self, w: &mut W, build_templates: F) -> io::Result<()> where
+    fn build_module<W, F>(&self, w: &mut W, build_templates: F) -> Result<(), Error> where
         W: Write,
-        F: FnOnce(&mut W, u8) -> io::Result<()>
+        F: FnOnce(&mut W, u8) -> Result<(), Error>
     {
         if let Some(ref namespace) = self.namespace {
             match self.variable_state {

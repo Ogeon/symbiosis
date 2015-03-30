@@ -1,7 +1,9 @@
-use std::io::{self, Write};
+use std::io::Write;
 use std::collections::HashMap;
 
 use string_cache::atom::Atom;
+
+use Error;
 
 ///Write an indented line of code.
 ///
@@ -20,12 +22,12 @@ macro_rules! line {
 ///and they have to implement this trait.
 pub trait Codegen {
     ///Generate code for a single template.
-    fn build_template<W: Write>(&self, w: &mut W, name: &str, indent: u8, params: &HashMap<String, ContentType>, tokens: &[Token]) -> io::Result<()>;
+    fn build_template<W: Write>(&self, w: &mut W, name: &str, indent: u8, params: &HashMap<String, ContentType>, tokens: &[Token]) -> Result<(), Error>;
 
     ///Generate code for a module or a similar collection containing multiple templates.
-    fn build_module<W, F>(&self, w: &mut W, build_templates: F) -> io::Result<()> where
+    fn build_module<W, F>(&self, w: &mut W, build_templates: F) -> Result<(), Error> where
         W: Write,
-        F: FnOnce(&mut W, u8) -> io::Result<()>
+        F: FnOnce(&mut W, u8) -> Result<(), Error>
     {
         build_templates(w, 0)
     }
@@ -115,7 +117,7 @@ pub enum ContentType {
 
 ///Write `4 * steps` spaces.
 #[inline]
-pub fn write_indent<W: Write>(writer: &mut W, steps: u8) -> io::Result<()> {
+pub fn write_indent<W: Write>(writer: &mut W, steps: u8) -> Result<(), Error> {
     for _ in 0..steps {
         try!(write!(writer, "    "));
     }

@@ -4,7 +4,7 @@ use std::path::Path;
 use std::fs::{File, create_dir_all};
 use std::default::Default;
 
-use symbiosis::TemplateGroup;
+use symbiosis::{TemplateGroup, Error};
 use symbiosis::rust::Rust;
 use symbiosis::javascript::JavaScript;
 
@@ -28,11 +28,11 @@ fn main() {
 
     let rust = Rust { ..Default::default() };
 
-    if let Err(e) = File::create(rust_dest.join("templates.rs")).and_then(|mut file| templates.emit_code(&mut file, &rust)) {
+    if let Err(e) = File::create(rust_dest.join("templates.rs")).map_err(|e| Error::Io(e)).and_then(|mut file| templates.emit_code(&mut file, &rust)) {
         panic!("failed to create symbiosis/templates.rs: {}", e)
     }
 
-    if let Err(e) = File::create(js_dest.join("templates.js")).and_then(|mut file| templates.emit_code(&mut file, &js)) {
+    if let Err(e) = File::create(js_dest.join("templates.js")).map_err(|e| Error::Io(e)).and_then(|mut file| templates.emit_code(&mut file, &js)) {
         panic!("failed to create templates/js/templates.js: {}", e)
     }
 }

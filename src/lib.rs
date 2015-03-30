@@ -36,6 +36,7 @@ mod parser;
 #[derive(Debug)]
 pub enum Error {
     Io(io::Error),
+    Format(fmt::Error),
     Parse(Vec<Cow<'static, str>>)
 }
 
@@ -45,12 +46,19 @@ impl FromError<io::Error> for Error {
     }
 }
 
+impl FromError<fmt::Error> for Error {
+    fn from_error(e: fmt::Error) -> Error {
+        Error::Format(e)
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             &Error::Io(ref e) => e.fmt(f),
+            &Error::Format(ref e) => e.fmt(f),
             &Error::Parse(ref e) => {
-                try!(write!(f, "Parse errors: "));
+                try!(write!(f, "parse errors: "));
                 for (i, error) in e.iter().enumerate() {
                     if i == 0 {
                         try!(error.fmt(f));
@@ -129,7 +137,7 @@ impl<'a> TemplateGroup<'a> {
     }
 
     ///Write template code.
-    pub fn emit_code<W: Write, C: Codegen>(&self, writer: &mut W, codegen: &C) -> io::Result<()> {
+    pub fn emit_code<W: Write, C: Codegen>(&self, writer: &mut W, codegen: &C) -> Result<(), Error> {
         codegen.build_module(writer, |w, indent| {
             for template in &self.templates {
                 try!(codegen.build_template(w, &template.name, indent, &template.parameters, &template.tokens));
@@ -196,7 +204,7 @@ impl<'a> Template<'a> {
     }
 
     ///Write template code.
-    pub fn emit_code<W: Write, C: Codegen>(&self, template_name: &str, writer: &mut W, codegen: &C) -> io::Result<()> {
+    pub fn emit_code<W: Write, C: Codegen>(&self, template_name: &str, writer: &mut W, codegen: &C) -> Result<(), Error> {
         codegen.build_template(writer, template_name, 0, &self.parameters, &self.tokens)
     }
 

@@ -1,7 +1,11 @@
-use std::io::{self, Write};
+use std::io::Write;
+use std::fmt::Write as FmtWrite;
 use std::collections::HashMap;
 use std::default::Default;
+
 use codegen::{Codegen, Logic, Token, Scope, ContentType, Content, write_indent};
+
+use Error;
 
 ///Visibility of modules and structures in Rust.
 pub enum Visibility {
@@ -20,7 +24,7 @@ pub struct Rust<'a> {
 }
 
 impl<'a> Rust<'a> {
-    fn eval_logic<W: Write>(&self, w: &mut W, first: bool, cond: &Logic, params: &HashMap<String, ContentType>) -> io::Result<()> {
+    fn eval_logic<W: Write>(&self, w: &mut W, first: bool, cond: &Logic, params: &HashMap<String, ContentType>) -> Result<(), Error> {
         match cond {
             &Logic::And(ref conds) => {
                 if !first {
@@ -79,12 +83,15 @@ impl<'a> Default for Rust<'a> {
 }
 
 impl<'a> Codegen for Rust<'a> {
-    fn build_template<W: Write>(&self, w: &mut W, name: &str, mut indent: u8, params: &HashMap<String, ContentType>, tokens: &[Token]) -> io::Result<()> {
+    fn build_template<W: Write>(&self, w: &mut W, name: &str, mut indent: u8, params: &HashMap<String, ContentType>, tokens: &[Token]) -> Result<(), Error> {
         let public = match (&self.visibility, &self.named_module) {
             (&Visibility::Public, _) => true,
             (_, &Some(_)) => true,
             _ => false
         };
+
+        let mut string_buf = String::new();
+        let mut fmt_args = vec![];
 
         if public {
             if params.len() > 0 {
@@ -122,15 +129,21 @@ impl<'a> Codegen for Rust<'a> {
 
         for token in tokens {
             match token {
-                &Token::BeginTag(ref name) => line!(w, indent, "try!(write!(writer, \"<{}\"));", name.as_slice()),
-                &Token::EndTag(_self_close) => line!(w, indent, "try!(write!(writer, \">\"));"),
-                &Token::CloseTag(ref name) => line!(w, indent, "try!(write!(writer, \"</{}>\"));", name.as_slice()),
+                &Token::BeginTag(ref name) => try!(write!(&mut string_buf, "<{}", name.as_slice())),
+                &Token::EndTag(_self_close) => try!(write!(&mut string_buf, ">")),
+                &Token::CloseTag(ref name) => try!(write!(&mut string_buf, "</{}>", name.as_slice())),
                 &Token::BeginAttribute(ref name, ref content) => match content {
-                    &Content::String(ref content) => line!(w, indent, "try!(write!(writer, \" {}=\\\"{}\"));", name.as_slice(), content),
+                    &Content::String(ref content) => try!(write!(&mut string_buf, " {}=\\\"{}", name.as_slice(), content)),
                     &Content::Placeholder(ref placeholder) => {
+
                         match params.get(placeholder) {
-                            Some(&ContentType::String) => line!(w, indent, "try!(write!(writer, \" {}=\\\"{{}}\", self.{}));", name.as_slice(), placeholder),
+                            Some(&ContentType::String) => {
+                                try!(write!(&mut string_buf, " {}=\\\"{{}}", name.as_slice()));
+                                fmt_args.push(format!("self.{}", placeholder));
+                            },
                             Some(&ContentType::OptionalString) => {
+                                try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
+
                                 line!(w, indent, "try!(write!(writer, \" {}=\\\"\"));", name.as_slice());
                                 line!(w, indent, "if let Some(val) = self.{} {{", placeholder);
                                 line!(w, indent + 1, "try!(write!(writer, \"{{}}\", val));");
@@ -141,11 +154,16 @@ impl<'a> Codegen for Rust<'a> {
                     }
                 },
                 &Token::AppendToAttribute(ref content) => match content {
-                    &Content::String(ref content) => line!(w, indent, "try!(write!(writer, \"{}\"));", content),
+                    &Content::String(ref content) => try!(write!(&mut string_buf, "{}", content)),
                     &Content::Placeholder(ref placeholder) => {
                         match params.get(placeholder) {
-                            Some(&ContentType::String) => line!(w, indent, "try!(write!(writer, \"{{}}\", self.{}));", placeholder),
+                            Some(&ContentType::String) => {
+                                try!(write!(&mut string_buf, "{{}}"));
+                                fmt_args.push(format!("self.{}", placeholder));
+                            },
                             Some(&ContentType::OptionalString) => {
+                                try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
+
                                 line!(w, indent, "if let Some(val) = self.{} {{", placeholder);
                                 line!(w, indent + 1, "try!(write!(writer, \"{{}}\", val));");
                                 line!(w, indent, "}}");
@@ -154,13 +172,18 @@ impl<'a> Codegen for Rust<'a> {
                         }
                     }
                 },
-                &Token::EndAttribute => line!(w, indent, "try!(write!(writer, \"\\\"\"));"),
+                &Token::EndAttribute => try!(write!(&mut string_buf, "\\\"")),
                 &Token::BeginText(ref text) | &Token::AppendToText(ref text) => match text {
-                    &Content::String(ref text) => line!(w, indent, "try!(write!(writer, \"{}\"));", text),
+                    &Content::String(ref text) => try!(write!(&mut string_buf, "{}", text)),
                     &Content::Placeholder(ref placeholder) => {
                         match params.get(placeholder) {
-                            Some(&ContentType::String) => line!(w, indent, "try!(write!(writer, \"{{}}\", self.{}));", placeholder),
+                            Some(&ContentType::String) => {
+                                try!(write!(&mut string_buf, "{{}}"));
+                                fmt_args.push(format!("self.{}", placeholder));
+                            },
                             Some(&ContentType::OptionalString) => {
+                                try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
+
                                 line!(w, indent, "if let Some(val) = self.{} {{", placeholder);
                                 line!(w, indent + 1, "try!(write!(writer, \"{{}}\", val));");
                                 line!(w, indent, "}}");
@@ -171,6 +194,8 @@ impl<'a> Codegen for Rust<'a> {
                 },
                 &Token::EndText => {},
                 &Token::Scope(Scope::If(ref cond)) => {
+                    try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
+
                     try!(write_indent(w, indent));
                     try!(write!(w, "if "));
                     try!(self.eval_logic(w, true, &cond.flattened(), params));
@@ -178,13 +203,15 @@ impl<'a> Codegen for Rust<'a> {
                     indent += 1;
                 },
                 &Token::End => {
+                    try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
+
                     indent -= 1;
                     line!(w, indent, "}}");
                 }
             }
         }
 
-        line!(w, indent, "Ok(())");
+        try!(write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
         indent -= 1;
 
         line!(w, indent, "}}");
@@ -194,9 +221,9 @@ impl<'a> Codegen for Rust<'a> {
         Ok(())
     }
 
-    fn build_module<W, F>(&self, w: &mut W, build_templates: F) -> io::Result<()> where
+    fn build_module<W, F>(&self, w: &mut W, build_templates: F) -> Result<(), Error> where
         W: Write,
-        F: FnOnce(&mut W, u8) -> io::Result<()>
+        F: FnOnce(&mut W, u8) -> Result<(), Error>
     {
         let indent = if let Some((ref module, ref visibility)) = self.named_module {
             match visibility {
@@ -216,4 +243,32 @@ impl<'a> Codegen for Rust<'a> {
 
         Ok(())
     }
+}
+
+fn try_write_and_clear_fmt<W: Write>(w: &mut W, indent: u8, buf: &mut String, args: &mut Vec<String>) -> Result<(), Error> {
+    if buf.len() > 0 {
+        if args.len() == 0 {
+            line!(w, indent, "try!(write!(writer, \"{}\"));", buf);
+        } else {
+            line!(w, indent, "try!(write!(writer, \"{}\", {}));", buf, args.connect(", "));
+        }
+        buf.clear();
+        args.clear();
+    }
+
+    Ok(())
+}
+
+fn write_and_clear_fmt<W: Write>(w: &mut W, indent: u8, buf: &mut String, args: &mut Vec<String>) -> Result<(), Error> {
+    if buf.len() > 0 {
+        if args.len() == 0 {
+            line!(w, indent, "write!(writer, \"{}\")", buf);
+        } else {
+            line!(w, indent, "write!(writer, \"{}\", {})", buf, args.connect(", "));
+        }
+        buf.clear();
+        args.clear();
+    }
+
+    Ok(())
 }
