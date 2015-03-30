@@ -331,7 +331,13 @@ impl<'a, 'b: 'a> TokenSink for &'a mut Template<'b> {
             HtmlToken::CharacterTokens(text) => if let Err(e) = self.add_text(text) {
                 self.errors.push(e);
             },
-            _ => {}
+
+            HtmlToken::DoctypeToken(_) => {},
+            HtmlToken::CommentToken(_) => {},
+            HtmlToken::NullCharacterToken => {},
+            HtmlToken::EOFToken => {},
+
+            HtmlToken::ParseError(e) => self.errors.push(e)
         }
     }
 }
