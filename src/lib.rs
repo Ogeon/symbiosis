@@ -21,15 +21,16 @@ use html5ever::tokenizer::Token as HtmlToken;
 
 use string_cache::atom::Atom;
 
-pub use codegen::{JavaScript, JsVarState, Rust, RustVisibility};
-
 use codegen::{Token, Content, Codegen, ContentType, Scope};
 use fragments::{Fragment, ReturnType};
 
 use parser::ExtensibleMap;
 
+#[macro_use]
 pub mod codegen;
 pub mod fragments;
+pub mod javascript;
+pub mod rust;
 mod parser;
 
 #[derive(Debug)]

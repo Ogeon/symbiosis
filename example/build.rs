@@ -4,7 +4,9 @@ use std::path::Path;
 use std::fs::{File, create_dir_all};
 use std::default::Default;
 
-use symbiosis::{TemplateGroup, JavaScript, Rust};
+use symbiosis::TemplateGroup;
+use symbiosis::rust::Rust;
+use symbiosis::javascript::JavaScript;
 
 fn main() {
     let out_dir = std::env::var("OUT_DIR").unwrap();
