@@ -4,7 +4,7 @@ use std::borrow::{Cow, Borrow};
 use std::hash::Hash;
 
 use fragments::{Fragment, InputType, ReturnType};
-use codegen::Content;
+use codegen::ContentType;
 
 pub enum ExtensibleMap<'a, K: 'a, V: 'a> {
     Owned(HashMap<K, V>),
@@ -44,7 +44,7 @@ pub fn parse_content(content: &str, fragments: &ExtensibleMap<&'static str, Box<
             '{' => match content.next() {
                 Some('{') => {
                     if buf.len() > 0 {
-                        tokens.push(ReturnType::Content(Content::String(buf)));
+                        tokens.push(ReturnType::String(buf));
                         buf = String::new();
                     }
 
@@ -66,7 +66,7 @@ pub fn parse_content(content: &str, fragments: &ExtensibleMap<&'static str, Box<
     }
 
     if buf.len() > 0 {
-        tokens.push(ReturnType::Content(Content::String(buf)));
+        tokens.push(ReturnType::String(buf));
     }
 
     Ok(tokens)
@@ -106,7 +106,7 @@ fn parse_fragment(content: &mut Chars, fragments: &ExtensibleMap<&'static str, B
     } else if &buf[..] == "end" {
         Ok(ReturnType::End)
     } else if buf.len() > 0 {
-        Ok(ReturnType::Content(Content::Placeholder(buf)))
+        Ok(ReturnType::Placeholder(buf, ContentType::String))
     } else {
         Err(Cow::Borrowed("empty fragment"))
     }
@@ -121,9 +121,9 @@ fn parse_sub_fragments(content: &mut Chars, fragments: &ExtensibleMap<&'static s
                 let args = try!(parse_sub_fragments(content, fragments));
                 if let Some(fragment) = fragments.get(&buf[..]) {
                     result.push(match try!(fragment.process(args)) {
-                        ReturnType::Content(val) => InputType::Content(val),
+                        ReturnType::Placeholder(name, ty) => InputType::Placeholder(name, ty),
                         ReturnType::Logic(cond) => InputType::Logic(cond),
-                        _ => return Err(Cow::Borrowed("inner fragments must only return content and logic"))
+                        _ => return Err(Cow::Borrowed("inner fragments must only return placeholders and logic"))
                     });
                 } else {
                     return Err(Cow::Owned(format!("'{}' is not a registered fragment", buf)));
@@ -131,7 +131,7 @@ fn parse_sub_fragments(content: &mut Chars, fragments: &ExtensibleMap<&'static s
                 buf.clear();
             },
             ',' => if buf.len() > 0 {
-                result.push(InputType::Content(Content::Placeholder(buf.clone())));
+                result.push(InputType::Placeholder(buf.clone(), ContentType::String));
                 buf.clear();
             },
             ')' => break,
@@ -144,7 +144,7 @@ fn parse_sub_fragments(content: &mut Chars, fragments: &ExtensibleMap<&'static s
     }
 
     if buf.len() > 0 {
-        result.push(InputType::Content(Content::Placeholder(buf)))
+        result.push(InputType::Placeholder(buf, ContentType::String))
     }
 
     Ok(result)

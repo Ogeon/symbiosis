@@ -1,6 +1,7 @@
 use std::io::Write;
 use std::collections::HashMap;
 use std::default::Default;
+use std::borrow::Cow;
 
 use string_cache::atom::Atom;
 
@@ -101,6 +102,7 @@ impl<'a> Codegen for JavaScript<'a> {
                 &ContentType::String => line!(w, indent + 1, "this.{} = \"\";", parameter),
                 &ContentType::OptionalString => line!(w, indent + 1, "this.{} = null;", parameter),
                 &ContentType::Bool => line!(w, indent + 1, "this.{} = false;", parameter),
+                &ContentType::Template | &ContentType::OptionalTemplate => line!(w, indent + 1, "this.{} = null;", parameter)
             }
         }
 
@@ -150,12 +152,20 @@ impl<'a> Codegen for JavaScript<'a> {
                     match content {
                         &Content::String(ref content) => line!(w, indent, "var {} = \"{}\";", attribute_var.1, content),
                         &Content::Placeholder(ref placeholder) => {
-                            line!(w, indent, "var {};", attribute_var.1);
-                            line!(w, indent, "if(this.{} !== null) {{", placeholder);
-                            line!(w, indent + 1, "{} = this.{};", attribute_var.1, placeholder);
-                            line!(w, indent, "}} else {{");
-                            line!(w, indent + 1, "{} = \"\";", attribute_var.1);
-                            line!(w, indent, "}}");
+                            match params.get(placeholder) {
+                                Some(&ContentType::String) | Some(&ContentType::OptionalString) | Some(&ContentType::Bool) => {
+                                    line!(w, indent, "var {};", attribute_var.1);
+                                    line!(w, indent, "if(this.{} !== null) {{", placeholder);
+                                    line!(w, indent + 1, "{} = this.{};", attribute_var.1, placeholder);
+                                    line!(w, indent, "}} else {{");
+                                    line!(w, indent + 1, "{} = \"\";", attribute_var.1);
+                                    line!(w, indent, "}}");
+                                },
+                                Some(&ContentType::Template) | Some(&ContentType::OptionalTemplate) => {
+                                    return Err(Error::Parse(vec![Cow::Borrowed("templates are not supported in attributes")]));
+                                },
+                                None => {}
+                            }
                         }
                     }
                 },
@@ -163,9 +173,17 @@ impl<'a> Codegen for JavaScript<'a> {
                     match content {
                         &Content::String(ref content) => line!(w, indent, "{} += \"{}\";", attribute_var.1, content),
                         &Content::Placeholder(ref placeholder) => {
-                            line!(w, indent, "if(this.{} !== null) {{", placeholder);
-                            line!(w, indent + 1, "{} += this.{};", attribute_var.1, placeholder);
-                            line!(w, indent, "}}");
+                            match params.get(placeholder) {
+                                Some(&ContentType::String) | Some(&ContentType::OptionalString) | Some(&ContentType::Bool) => {
+                                    line!(w, indent, "if(this.{} !== null) {{", placeholder);
+                                    line!(w, indent + 1, "{} += this.{};", attribute_var.1, placeholder);
+                                    line!(w, indent, "}}");
+                                },
+                                Some(&ContentType::Template) | Some(&ContentType::OptionalTemplate) => {
+                                    return Err(Error::Parse(vec![Cow::Borrowed("templates are not supported in attributes")]));
+                                },
+                                None => {}
+                            }
                         }
                     }
                 },
@@ -180,12 +198,27 @@ impl<'a> Codegen for JavaScript<'a> {
                     match content {
                         &Content::String(ref content) => line!(w, indent, "var {} = \"{}\";", text_var, content),
                         &Content::Placeholder(ref placeholder) => {
-                            line!(w, indent, "var {};", text_var);
-                            line!(w, indent, "if(this.{} !== null) {{", placeholder);
-                            line!(w, indent + 1, "{} = this.{};", text_var, placeholder);
-                            line!(w, indent, "}} else {{");
-                            line!(w, indent + 1, "{} = \"\";", text_var);
-                            line!(w, indent, "}}");
+                            match params.get(placeholder) {
+                                Some(&ContentType::String) | Some(&ContentType::OptionalString) | Some(&ContentType::Bool) => {
+                                    line!(w, indent, "var {};", text_var);
+                                    line!(w, indent, "if(this.{} !== null) {{", placeholder);
+                                    line!(w, indent + 1, "{} = this.{};", text_var, placeholder);
+                                    line!(w, indent, "}} else {{");
+                                    line!(w, indent + 1, "{} = \"\";", text_var);
+                                    line!(w, indent, "}}");
+                                },
+                                Some(&ContentType::Template) | Some(&ContentType::OptionalTemplate) => {
+                                    line!(w, indent, "if(this.{} !== null) {{", placeholder);
+                                    if let Some(element) = element_stack.last() {
+                                        line!(w, indent + 1, "this.{}.render_to({});", placeholder, element);
+                                    } else {
+                                        line!(w, indent + 1, "this.{}.render_to(root);", placeholder);
+                                    }
+                                    line!(w, indent, "}}");
+                                    line!(w, indent, "var {};", text_var);
+                                },
+                                None => {}
+                            }
                         }
                     }
                 },
@@ -193,9 +226,26 @@ impl<'a> Codegen for JavaScript<'a> {
                     match content {
                         &Content::String(ref content) => line!(w, indent, "{} += \"{}\";", text_var, content),
                         &Content::Placeholder(ref placeholder) => {
-                            line!(w, indent, "if(this.{} !== null) {{", placeholder);
-                            line!(w, indent + 1, "{} += this.{};", text_var, placeholder);
-                            line!(w, indent, "}}");
+                            match params.get(placeholder) {
+                                Some(&ContentType::String) | Some(&ContentType::OptionalString) | Some(&ContentType::Bool) => {
+                                    line!(w, indent, "if(this.{} !== null) {{", placeholder);
+                                    line!(w, indent + 1, "{} += this.{};", text_var, placeholder);
+                                    line!(w, indent, "}}");
+                                },
+                                Some(&ContentType::Template) | Some(&ContentType::OptionalTemplate) => {
+                                    line!(w, indent, "if(this.{} !== null) {{", placeholder);
+                                    if let Some(element) = element_stack.last() {
+                                        line!(w, indent + 1, "{}.appendChild(document.createTextNode({}));", element, text_var);
+                                        line!(w, indent + 1, "this.{}.render_to({});", placeholder, element);
+                                    } else {
+                                        line!(w, indent + 1, "root.appendChild(document.createTextNode({}));", text_var);
+                                        line!(w, indent + 1, "this.{}.render_to(root);", placeholder);
+                                    }
+                                    line!(w, indent + 1, "{} = \"\";", text_var);
+                                    line!(w, indent, "}}");
+                                },
+                                None => {}
+                            }
                         }
                     }
                 },

@@ -1,5 +1,7 @@
 use std::io::Write;
 use std::collections::HashMap;
+use std::borrow::Cow;
+use std::fmt;
 
 use string_cache::atom::Atom;
 
@@ -14,6 +16,20 @@ macro_rules! line {
         {
             try!($crate::codegen::write_indent($writer, $indent));
             try!(writeln!($writer, $($format)*));
+        }
+    )
+}
+
+macro_rules! gen_comb {
+    (match $e:expr {$($res:path: {$(($a:path,  $b:path)),*}),*}) => (
+        match $e {
+            $(
+                (&$res, $res) => Ok($res),
+                $(
+                    (&$a, $b) | (&$b, $a) => Ok($res),
+                )*
+            )*
+            (a, b) => Err(Cow::Owned(format!("content cannot be used as both {} and {}", a, b)))
         }
     )
 }
@@ -68,16 +84,22 @@ pub enum Logic {
 }
 
 impl Logic {
-    pub fn parameters<F: FnMut(&String)>(&self, f: &mut F) {
+    pub fn placeholders(&self) -> Vec<&str> {
+        let mut res = vec![];
+        self.placeholders_r(&mut res);
+        res
+    }
+
+    fn placeholders_r<'a>(&'a self, res: &mut Vec<&'a str>) {
         match self {
             &Logic::And(ref conds) => for cond in conds {
-                cond.parameters(f);
+                cond.placeholders_r(res);
             },
             &Logic::Or(ref conds) => for cond in conds {
-                cond.parameters(f);
+                cond.placeholders_r(res);
             },
-            &Logic::Not(ref cond) => cond.parameters(f),
-            &Logic::Value(ref name) => f(name)
+            &Logic::Not(ref cond) => cond.placeholders_r(res),
+            &Logic::Value(ref name) => res.push(name)
         }
     }
 
@@ -112,7 +134,45 @@ pub enum ContentType {
     ///An optionally defined string.
     OptionalString,
     ///A boolean value.
-    Bool
+    Bool,
+    ///An other template.
+    Template,
+    ///An optionally defined template.
+    OptionalTemplate
+}
+
+impl ContentType {
+    pub fn combined_with(&self, pref_ty: ContentType) -> Result<ContentType, Cow<'static, str>> {
+        gen_comb!{
+            match (self, pref_ty) {
+                ContentType::String: {},
+                ContentType::OptionalString: {
+                    (ContentType::String, ContentType::Bool),
+                    (ContentType::OptionalString, ContentType::String),
+                    (ContentType::OptionalString, ContentType::Bool)
+                },
+                ContentType::Bool: {},
+                ContentType::Template: {},
+                ContentType::OptionalTemplate: {
+                    (ContentType::Template, ContentType::Bool),
+                    (ContentType::OptionalTemplate, ContentType::Template),
+                    (ContentType::OptionalTemplate, ContentType::Bool)
+                }
+            }
+        }
+    }
+}
+
+impl fmt::Display for ContentType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            &ContentType::String => "string".fmt(f),
+            &ContentType::OptionalString => "optional string".fmt(f),
+            &ContentType::Bool => "boolean value".fmt(f),
+            &ContentType::Template => "template".fmt(f),
+            &ContentType::OptionalTemplate => "optional template".fmt(f)
+        }
+    }
 }
 
 ///Write `4 * steps` spaces.

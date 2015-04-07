@@ -1,0 +1,7 @@
+[package]
+name = "symbiosis-rust"
+version = "0.0.1"
+authors = ["Erik Hedvall <hello@erikhedvall.nu>"]
+
+[lib]
+name = "symbiosis_rust"

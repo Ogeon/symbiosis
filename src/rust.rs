@@ -2,6 +2,7 @@ use std::io::Write;
 use std::fmt::Write as FmtWrite;
 use std::collections::HashMap;
 use std::default::Default;
+use std::borrow::Cow;
 
 use codegen::{Codegen, Logic, Token, Scope, ContentType, Content, write_indent};
 
@@ -61,8 +62,8 @@ impl<'a> Rust<'a> {
             },
             &Logic::Value(ref val) => {
                 match params.get(val) {
-                    Some(&ContentType::String) => try!(write!(w, "true")),
-                    Some(&ContentType::OptionalString) => try!(write!(w, "self.{}.is_some()", val)),
+                    Some(&ContentType::String) | Some(&ContentType::Template) => try!(write!(w, "true")),
+                    Some(&ContentType::OptionalString) | Some(&ContentType::OptionalTemplate) => try!(write!(w, "self.{}.is_some()", val)),
                     Some(&ContentType::Bool) => try!(write!(w, "self.{}", val)),
                     None => {}
                 }
@@ -112,19 +113,21 @@ impl<'a> Codegen for Rust<'a> {
                 &ContentType::String => line!(w, indent + 1, "pub {}: &'a str,", parameter),
                 &ContentType::OptionalString => line!(w, indent + 1, "pub {}: Option<&'a str>,", parameter),
                 &ContentType::Bool => line!(w, indent + 1, "pub {}: bool,", parameter),
+                &ContentType::Template => line!(w, indent + 1, "pub {}: &'a ::symbiosis_rust::Template,", parameter),
+                &ContentType::OptionalTemplate => line!(w, indent + 1, "pub {}: Option<&'a ::symbiosis_rust::Template>,", parameter),
             }
         }
         
         line!(w, indent, "}}");
 
         if params.len() > 0 {
-            line!(w, indent, "impl<'a> {}<'a> {{", name);
+            line!(w, indent, "impl<'a> ::symbiosis_rust::Template for {}<'a> {{", name);
         } else {
-            line!(w, indent, "impl {} {{", name);
+            line!(w, indent, "impl ::symbiosis_rust::Template for {} {{", name);
         }
         indent += 1;
 
-        line!(w, indent, "pub fn render_to<W: ::std::io::Write>(&self, writer: &mut W) -> ::std::io::Result<()> {{");
+        line!(w, indent, "fn render_to(&self, writer: &mut ::std::io::Write) -> ::std::io::Result<()> {{");
         indent += 1;
 
         for token in tokens {
@@ -142,18 +145,33 @@ impl<'a> Codegen for Rust<'a> {
                                 fmt_args.push(format!("self.{}", placeholder));
                             },
                             Some(&ContentType::OptionalString) => {
+                                try!(write!(&mut string_buf, " {}=\\\"", name.as_slice()));
                                 try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
 
-                                line!(w, indent, "try!(write!(writer, \" {}=\\\"\"));", name.as_slice());
                                 line!(w, indent, "if let Some(val) = self.{} {{", placeholder);
                                 line!(w, indent + 1, "try!(write!(writer, \"{{}}\", val));");
                                 line!(w, indent, "}}");
                             },
-                            _ => {}
+                            Some(&ContentType::Template) => {
+                                try!(write!(&mut string_buf, " {}=\\\"", name.as_slice()));
+                                try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
+
+                                line!(w, indent, "try!(self.{}.render_to(writer));", placeholder);
+                            },
+                            Some(&ContentType::OptionalTemplate) => {
+                                try!(write!(&mut string_buf, " {}=\\\"", name.as_slice()));
+                                try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
+
+                                line!(w, indent, "if let Some(template) = self.{} {{", placeholder);
+                                line!(w, indent + 1, "try!(template.render_to(writer));");
+                                line!(w, indent, "}}");
+                            },
+                            Some(&ContentType::Bool) => return Err(Error::Parse(vec![Cow::Borrowed("boolean values cannot be rendered as text")])),
+                            None => {}
                         }
                     }
                 },
-                &Token::AppendToAttribute(ref content) => match content {
+                &Token::AppendToAttribute(ref text) | &Token::BeginText(ref text) | &Token::AppendToText(ref text) => match text {
                     &Content::String(ref content) => try!(write!(&mut string_buf, "{}", content)),
                     &Content::Placeholder(ref placeholder) => {
                         match params.get(placeholder) {
@@ -168,30 +186,24 @@ impl<'a> Codegen for Rust<'a> {
                                 line!(w, indent + 1, "try!(write!(writer, \"{{}}\", val));");
                                 line!(w, indent, "}}");
                             },
-                            _ => {}
+                            Some(&ContentType::Template) => {
+                                try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
+
+                                line!(w, indent, "try!(self.{}.render_to(writer));", placeholder);
+                            },
+                            Some(&ContentType::OptionalTemplate) => {
+                                try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
+
+                                line!(w, indent, "if let Some(template) = self.{} {{", placeholder);
+                                line!(w, indent + 1, "try!(template.render_to(writer));");
+                                line!(w, indent, "}}");
+                            },
+                            Some(&ContentType::Bool) => return Err(Error::Parse(vec![Cow::Borrowed("boolean values cannot be rendered as text")])),
+                            None => {}
                         }
                     }
                 },
                 &Token::EndAttribute => try!(write!(&mut string_buf, "\\\"")),
-                &Token::BeginText(ref text) | &Token::AppendToText(ref text) => match text {
-                    &Content::String(ref text) => try!(write!(&mut string_buf, "{}", text)),
-                    &Content::Placeholder(ref placeholder) => {
-                        match params.get(placeholder) {
-                            Some(&ContentType::String) => {
-                                try!(write!(&mut string_buf, "{{}}"));
-                                fmt_args.push(format!("self.{}", placeholder));
-                            },
-                            Some(&ContentType::OptionalString) => {
-                                try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
-
-                                line!(w, indent, "if let Some(val) = self.{} {{", placeholder);
-                                line!(w, indent + 1, "try!(write!(writer, \"{{}}\", val));");
-                                line!(w, indent, "}}");
-                            },
-                            _ => {}
-                        }
-                    },
-                },
                 &Token::EndText => {},
                 &Token::Scope(Scope::If(ref cond)) => {
                     try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));

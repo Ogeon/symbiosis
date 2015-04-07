@@ -5,7 +5,7 @@ use std::path::Path;
 use std::fs::{File, read_dir};
 use std::io::{self, Read, Write};
 use std::default::Default;
-use std::borrow::Cow;
+use std::borrow::{Cow, ToOwned};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::fmt;
@@ -211,14 +211,14 @@ impl<'a> Template<'a> {
         for attribute in attributes {
             let mut content = try!(parser::parse_content(&attribute.value, &self.fragments)).into_iter();
             match content.next() {
-                Some(ReturnType::Content(Content::String(text))) => self.tokens.push(Token::BeginAttribute(attribute.name.local, Content::String(text))),
-                Some(ReturnType::Content(Content::Placeholder(name))) => {
-                    self.reg_string(name.clone());
+                Some(ReturnType::String(text)) => self.tokens.push(Token::BeginAttribute(attribute.name.local, Content::String(text))),
+                Some(ReturnType::Placeholder(name, ty)) => {
+                    try!(self.reg_placeholder(name.clone(), ty));
                     self.tokens.push(Token::BeginAttribute(attribute.name.local, Content::Placeholder(name)));
                 },
                 Some(ReturnType::Logic(_)) => return Err(Cow::Borrowed("logic can not be used as text")),
                 Some(ReturnType::Scope(scope)) => {
-                    self.reg_scope_vars(&scope);
+                    try!(self.reg_scope_vars(&scope));
                     self.tokens.push(Token::Scope(scope));
                 },
                 Some(ReturnType::End) => self.tokens.push(Token::End),
@@ -227,14 +227,14 @@ impl<'a> Template<'a> {
 
             for part in content {
                 match part {
-                    ReturnType::Content(Content::String(text)) => self.tokens.push(Token::AppendToAttribute(Content::String(text))),
-                    ReturnType::Content(Content::Placeholder(name)) => {
-                        self.reg_string(name.clone());
+                    ReturnType::String(text) => self.tokens.push(Token::AppendToAttribute(Content::String(text))),
+                    ReturnType::Placeholder(name, ty) => {
+                        try!(self.reg_placeholder(name.clone(), ty));
                         self.tokens.push(Token::AppendToAttribute(Content::Placeholder(name)));
                     },
                     ReturnType::Logic(_) => return Err(Cow::Borrowed("logic can not be used as text")),
                     ReturnType::Scope(scope) => {
-                        self.reg_scope_vars(&scope);
+                        try!(self.reg_scope_vars(&scope));
                         self.tokens.push(Token::Scope(scope));
                     },
                     ReturnType::End => self.tokens.push(Token::End),
@@ -252,14 +252,14 @@ impl<'a> Template<'a> {
     fn add_text(&mut self, text: String) -> Result<(), Cow<'static, str>> {
         let mut content = try!(parser::parse_content(&text, &self.fragments)).into_iter();
         match content.next() {
-            Some(ReturnType::Content(Content::String(text))) => self.tokens.push(Token::BeginText(Content::String(text))),
-            Some(ReturnType::Content(Content::Placeholder(name))) => {
-                self.reg_string(name.clone());
+            Some(ReturnType::String(text)) => self.tokens.push(Token::BeginText(Content::String(text))),
+            Some(ReturnType::Placeholder(name, ty)) => {
+                try!(self.reg_placeholder(name.clone(), ty));
                 self.tokens.push(Token::BeginText(Content::Placeholder(name)));
             },
             Some(ReturnType::Logic(_)) => return Err(Cow::Borrowed("logic can not be used as text")),
             Some(ReturnType::Scope(scope)) => {
-                self.reg_scope_vars(&scope);
+                try!(self.reg_scope_vars(&scope));
                 self.tokens.push(Token::Scope(scope));
             },
             Some(ReturnType::End) => self.tokens.push(Token::End),
@@ -268,14 +268,14 @@ impl<'a> Template<'a> {
 
         for part in content {
             match part {
-                ReturnType::Content(Content::String(text)) => self.tokens.push(Token::AppendToText(Content::String(text))),
-                ReturnType::Content(Content::Placeholder(name)) => {
-                    self.reg_string(name.clone());
+                ReturnType::String(text) => self.tokens.push(Token::AppendToText(Content::String(text))),
+                ReturnType::Placeholder(name, ty) => {
+                    try!(self.reg_placeholder(name.clone(), ty));
                     self.tokens.push(Token::AppendToText(Content::Placeholder(name)));
                 },
                 ReturnType::Logic(_) => return Err(Cow::Borrowed("logic can not be used as text")),
                 ReturnType::Scope(scope) => {
-                    self.reg_scope_vars(&scope);
+                    try!(self.reg_scope_vars(&scope));
                     self.tokens.push(Token::Scope(scope));
                 },
                 ReturnType::End => self.tokens.push(Token::End),
@@ -290,30 +290,26 @@ impl<'a> Template<'a> {
         self.tokens.push(Token::CloseTag(tag));
     }
 
-    fn reg_scope_vars(&mut self, scope: &Scope) {
+    fn reg_scope_vars(&mut self, scope: &Scope) -> Result<(), Cow<'static, str>> {
         match scope {
-            &Scope::If(ref logic) => logic.parameters(&mut |param| self.reg_bool(param.clone()))
+            &Scope::If(ref logic) => for p in logic.placeholders() {
+                try!(self.reg_placeholder(p.to_owned(), ContentType::Bool))
+            }
         }
+
+        Ok(())
     }
 
-    fn reg_string(&mut self, param: String) {
+    fn reg_placeholder(&mut self, param: String, pref_ty: ContentType) -> Result<(), Cow<'static, str>> {
         match self.parameters.entry(param) {
-            Entry::Occupied(mut entry) => match entry.get_mut() {
-                &mut ContentType::String => {},
-                entry => *entry = ContentType::OptionalString
+            Entry::Occupied(mut entry) => {
+                let new_ty = try!(entry.get().combined_with(pref_ty));
+                *entry.get_mut() = new_ty;
             },
-            Entry::Vacant(entry) => { entry.insert(ContentType::String); },
+            Entry::Vacant(entry) => { entry.insert(pref_ty); },
         }
-    }
 
-    fn reg_bool(&mut self, param: String) {
-        match self.parameters.entry(param) {
-            Entry::Occupied(mut entry) => match entry.get_mut() {
-                &mut ContentType::Bool => {},
-                entry => *entry = ContentType::OptionalString
-            },
-            Entry::Vacant(entry) => { entry.insert(ContentType::Bool); },
-        }
+        Ok(())
     }
 }
 
@@ -382,6 +378,9 @@ fn init_fragments<'a>() -> HashMap<&'static str, Box<Fragment + 'a>> {
     map.insert(f.identifier(), Box::new(f));
 
     let f = fragments::Not;
+    map.insert(f.identifier(), Box::new(f));
+
+    let f = fragments::Template;
     map.insert(f.identifier(), Box::new(f));
 
     map

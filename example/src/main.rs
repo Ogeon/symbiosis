@@ -1,3 +1,7 @@
+extern crate symbiosis_rust;
+
+use symbiosis_rust::Template;
+
 mod templates;
 
 use std::io::Write;

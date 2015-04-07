@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use codegen::{Content, Scope, Logic};
+use codegen::{Scope, Logic, ContentType};
 
 macro_rules! impl_fragment {
     ($(#[$attr:meta])* frag $str_name:expr => $name:ident: |$args:ident| $process:block) => {
@@ -46,8 +46,10 @@ impl<'a, F: Fragment> Fragment for &'a F {
 
 ///Things that can be returned from fragments.
 pub enum ReturnType {
-    ///A piece of text content.
-    Content(Content),
+    ///A plane text string.
+    String(String),
+    ///A placeholder parameter and its preferred content type.
+    Placeholder(String, ContentType),
     ///A logic expression.
     Logic(Logic),
     ///The beginning of a scope.
@@ -58,8 +60,8 @@ pub enum ReturnType {
 
 ///Things that can be sent into fragments.
 pub enum InputType {
-    ///A piece of text content.
-    Content(Content),
+    ///A placeholder parameter and its preferred content type.
+    Placeholder(String, ContentType),
     ///A logic expression.
     Logic(Logic)
 }
@@ -86,8 +88,7 @@ impl_fragment!{
 
         for arg in args {
             match arg {
-                InputType::Content(Content::String(_)) => return Err(Cow::Borrowed("unexpected string in if(...) fragment")),
-                InputType::Content(Content::Placeholder(name)) => conds.push(Logic::Value(name)),
+                InputType::Placeholder(name, _) => conds.push(Logic::Value(name)),
                 InputType::Logic(cond) => conds.push(cond)
             }
         }
@@ -110,8 +111,7 @@ impl_fragment!{
 
         for arg in args {
             match arg {
-                InputType::Content(Content::String(_)) => return Err(Cow::Borrowed("unexpected string in and(...) fragment")),
-                InputType::Content(Content::Placeholder(name)) => conds.push(Logic::Value(name)),
+                InputType::Placeholder(name, _) => conds.push(Logic::Value(name)),
                 InputType::Logic(cond) => conds.push(cond)
             }
         }
@@ -134,8 +134,7 @@ impl_fragment!{
 
         for arg in args {
             match arg {
-                InputType::Content(Content::String(_)) => return Err(Cow::Borrowed("unexpected string in or(...) fragment")),
-                InputType::Content(Content::Placeholder(name)) => conds.push(Logic::Value(name)),
+                InputType::Placeholder(name, _) => conds.push(Logic::Value(name)),
                 InputType::Logic(cond) => conds.push(cond)
             }
         }
@@ -154,11 +153,24 @@ impl_fragment!{
         }
 
         let cond = match args.into_iter().next().unwrap() {
-            InputType::Content(Content::String(_)) => return Err(Cow::Borrowed("unexpected string in not(...) fragment")),
-            InputType::Content(Content::Placeholder(name)) => Logic::Value(name),
+            InputType::Placeholder(name, _) => Logic::Value(name),
             InputType::Logic(cond) => cond
         };
 
         Ok(ReturnType::Logic(Logic::Not(Box::new(cond))))
+    }
+}
+
+impl_fragment!{
+    #[doc = "`template(a)` tells the parser that the placeholder `a` is an other template."]
+    frag "template" => Template: |args| {
+        if args.len() != 1 {
+            return Err(Cow::Borrowed("template will only accept one argument"));
+        }
+
+        match args.into_iter().next().unwrap() {
+            InputType::Placeholder(name, _) => Ok(ReturnType::Placeholder(name, ContentType::Template)),
+            InputType::Logic(_) => Err(Cow::Borrowed("template expected a placeholder, but found a logic expression"))
+        }
     }
 }
