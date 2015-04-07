@@ -1,13 +1,9 @@
-#![feature(convert)]
-
 extern crate html5ever;
 extern crate string_cache;
 
-use std::convert::AsRef;
 use std::path::Path;
 use std::fs::{File, read_dir};
 use std::io::{self, Read, Write};
-use std::error::FromError;
 use std::default::Default;
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -40,14 +36,14 @@ pub enum Error {
     Parse(Vec<Cow<'static, str>>)
 }
 
-impl FromError<io::Error> for Error {
-    fn from_error(e: io::Error) -> Error {
+impl From<io::Error> for Error {
+    fn from(e: io::Error) -> Error {
         Error::Io(e)
     }
 }
 
-impl FromError<fmt::Error> for Error {
-    fn from_error(e: fmt::Error) -> Error {
+impl From<fmt::Error> for Error {
+    fn from(e: fmt::Error) -> Error {
         Error::Format(e)
     }
 }
