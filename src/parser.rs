@@ -58,6 +58,9 @@ pub fn parse_content(content: &str, fragments: &ExtensibleMap<&'static str, Box<
             },
             '\n' => buf.push_str("\\n"),
             '\t' => buf.push_str("\\t"),
+            '\\' => if let Some(c) = content.next() {
+                buf.push(c);
+            },
             c => buf.push(c)
         }
     }
@@ -89,6 +92,9 @@ fn parse_fragment(content: &mut Chars, fragments: &ExtensibleMap<&'static str, B
                     buf.push('}');
                     buf.push(c);
                 }
+            },
+            '\\' => if let Some(c) = content.next() {
+                buf.push(c);
             },
             c if c.is_whitespace() => {},
             c => buf.push(c)
@@ -129,6 +135,9 @@ fn parse_sub_fragments(content: &mut Chars, fragments: &ExtensibleMap<&'static s
                 buf.clear();
             },
             ')' => break,
+            '\\' => if let Some(c) = content.next() {
+                buf.push(c);
+            },
             c if c.is_whitespace() => {},
             c => buf.push(c)
         }
