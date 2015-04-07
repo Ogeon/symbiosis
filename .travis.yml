@@ -1,0 +1,17 @@
+language: rust
+os:
+  - linux
+  - osx
+script:
+  - cargo build -v
+  - cargo test -v
+  - cd rust
+  - cargo build -v
+  - cargo test -v
+  - cargo doc
+  - mv target/doc ../target/doc
+  - cd ../example
+  - cargo build -v
+  - cd ..
+  - cargo doc
+after_success: curl https://raw.githubusercontent.com/ogeon/travis-doc-upload/master/travis-doc-upload.sh | sh
