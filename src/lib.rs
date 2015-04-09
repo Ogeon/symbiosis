@@ -12,7 +12,7 @@ use std::fmt;
 use std::mem::swap;
 
 use html5ever::Attribute;
-use html5ever::tokenizer::{Tokenizer, TokenSink, Tag, TagKind};
+use html5ever::tokenizer::{Tokenizer, TokenSink, Tag, TagKind, Doctype};
 use html5ever::tokenizer::Token as HtmlToken;
 
 use string_cache::atom::Atom;
@@ -204,6 +204,10 @@ impl<'a> Template<'a> {
         codegen.build_template(writer, template_name, 0, &self.parameters, &self.tokens)
     }
 
+    fn set_doctype(&mut self, doctype: Doctype) {
+        self.tokens.push(Token::SetDoctype(doctype));
+    }
+
     fn open_tag(&mut self, name: Atom, attributes: Vec<Attribute>, self_closing: bool) -> Result<(), Cow<'static, str>> {
         let void = is_void(name.as_slice());
         self.tokens.push(Token::BeginTag(name));
@@ -332,8 +336,8 @@ impl<'a, 'b: 'a> TokenSink for &'a mut Template<'b> {
             HtmlToken::CharacterTokens(text) => if let Err(e) = self.add_text(text) {
                 self.errors.push(e);
             },
+            HtmlToken::DoctypeToken(doctype) => self.set_doctype(doctype),
 
-            HtmlToken::DoctypeToken(_) => {},
             HtmlToken::CommentToken(_) => {},
             HtmlToken::NullCharacterToken => {},
             HtmlToken::EOFToken => {},

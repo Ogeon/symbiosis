@@ -4,6 +4,7 @@ use std::borrow::Cow;
 use std::fmt;
 
 use string_cache::atom::Atom;
+use html5ever::tokenizer::Doctype;
 
 use Error;
 
@@ -51,6 +52,7 @@ pub trait Codegen {
 
 ///Tokens representing different parts of a template document.
 pub enum Token {
+    SetDoctype(Doctype),
     BeginTag(Atom),
     EndTag(bool),
     CloseTag(Atom),

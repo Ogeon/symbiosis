@@ -134,6 +134,23 @@ impl<'a> Codegen for Rust<'a> {
 
         for token in tokens {
             match token {
+                &Token::SetDoctype(ref doctype) => {
+                    string_buf.push_str("<!DOCTYPE");
+                    if let Some(ref name) = doctype.name {
+                        try!(write!(&mut string_buf, " {}", name));
+                    }
+
+                    if let Some(ref public_id) = doctype.public_id {
+                        try!(write!(&mut string_buf, " PUBLIC \\\"{}\\\"", public_id));
+                    } else if doctype.system_id.is_some() {
+                        string_buf.push_str(" SYSTEM");
+                    }
+
+                    if let Some(ref system_id) = doctype.system_id {
+                        try!(write!(&mut string_buf, " \\\"{}\\\"", system_id));
+                    }
+                    string_buf.push_str(">");
+                },
                 &Token::BeginTag(ref name) => try!(write!(&mut string_buf, "<{}", name.as_slice())),
                 &Token::EndTag(_self_close) => try!(write!(&mut string_buf, ">")),
                 &Token::CloseTag(ref name) => try!(write!(&mut string_buf, "</{}>", name.as_slice())),

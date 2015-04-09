@@ -124,6 +124,7 @@ impl<'a> Codegen for JavaScript<'a> {
 
         for token in tokens {
             match token {
+                &Token::SetDoctype(_) => return Err(Error::Parse(vec![Cow::Borrowed("doctype declarations are currently not supported")])),
                 &Token::BeginTag(ref name) => {
                     let var = format!("tag_{}_{}", to_valid_ident(name.as_slice()), var_counter);
                     var_counter += 1;
