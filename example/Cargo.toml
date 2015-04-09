@@ -5,6 +5,13 @@ version = "0.0.0"
 authors = ["Erik Hedvall <hello@erikhedvall.nu>"]
 build = "build.rs"
 
+[dependencies]
+rand = "*"
+rustc-serialize = "*"
+
+[dependencies.rustful]
+git = "https://github.com/Ogeon/rustful"
+
 [dependencies.symbiosis-rust]
 path = "../rust"
 
