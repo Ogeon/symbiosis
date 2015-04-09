@@ -222,10 +222,14 @@ impl<'a> Template<'a> {
                 },
                 Some(ReturnType::Logic(_)) => return Err(Cow::Borrowed("logic can not be used as text")),
                 Some(ReturnType::Scope(scope)) => {
+                    self.tokens.push(Token::BeginAttribute(attribute.name.local, Content::String("".into())));
                     try!(self.reg_scope_vars(&scope));
                     self.tokens.push(Token::Scope(scope));
                 },
-                Some(ReturnType::End) => self.tokens.push(Token::End),
+                Some(ReturnType::End) => {
+                    self.tokens.push(Token::End);
+                    self.tokens.push(Token::BeginAttribute(attribute.name.local, Content::String("".into())));
+                },
                 None => self.tokens.push(Token::BeginAttribute(attribute.name.local, Content::String(String::new())))
             }
 
@@ -263,10 +267,14 @@ impl<'a> Template<'a> {
             },
             Some(ReturnType::Logic(_)) => return Err(Cow::Borrowed("logic can not be used as text")),
             Some(ReturnType::Scope(scope)) => {
+                self.tokens.push(Token::BeginText(Content::String("".into())));
                 try!(self.reg_scope_vars(&scope));
                 self.tokens.push(Token::Scope(scope));
             },
-            Some(ReturnType::End) => self.tokens.push(Token::End),
+            Some(ReturnType::End) => {
+                self.tokens.push(Token::End);
+                self.tokens.push(Token::BeginText(Content::String("".into())))
+            },
             None => return Ok(())
         }
 
