@@ -118,7 +118,9 @@ impl<'a> Codegen for Rust<'a> {
             }
         }
         
-        line!(w, indent, "}}");
+        if params.len() > 0 {
+            line!(w, indent, "}}");
+        }
 
         if params.len() > 0 {
             line!(w, indent, "impl<'a> ::symbiosis_rust::Template for {}<'a> {{", name);
