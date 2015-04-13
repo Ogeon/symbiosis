@@ -106,7 +106,7 @@ fn parse_fragment(content: &mut Chars, fragments: &ExtensibleMap<&'static str, B
     } else if &buf[..] == "end" {
         Ok(ReturnType::End)
     } else if buf.len() > 0 {
-        Ok(ReturnType::Placeholder(buf, ContentType::String))
+        Ok(ReturnType::Placeholder(buf, ContentType::String(false)))
     } else {
         Err(Cow::Borrowed("empty fragment"))
     }
@@ -131,7 +131,7 @@ fn parse_sub_fragments(content: &mut Chars, fragments: &ExtensibleMap<&'static s
                 buf.clear();
             },
             ',' => if buf.len() > 0 {
-                result.push(InputType::Placeholder(buf.clone(), ContentType::String));
+                result.push(InputType::Placeholder(buf.clone(), ContentType::String(false)));
                 buf.clear();
             },
             ')' => break,
@@ -144,7 +144,7 @@ fn parse_sub_fragments(content: &mut Chars, fragments: &ExtensibleMap<&'static s
     }
 
     if buf.len() > 0 {
-        result.push(InputType::Placeholder(buf, ContentType::String))
+        result.push(InputType::Placeholder(buf, ContentType::String(false)))
     }
 
     Ok(result)

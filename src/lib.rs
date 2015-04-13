@@ -154,6 +154,7 @@ pub struct Template<'a> {
     fragments: ExtensibleMap<'a, &'static str, Box<Fragment + 'a>>,
     parameters: HashMap<String, ContentType>,
     tokens: Vec<codegen::Token>,
+    scopes: Vec<Option<(String, String, Option<ContentType>, Option<String>)>>,
     errors: Vec<Cow<'static, str>>
 }
 
@@ -164,6 +165,7 @@ impl<'a> Template<'a> {
             fragments: ExtensibleMap::Owned(init_fragments()),
             parameters: HashMap::new(),
             tokens: vec![],
+            scopes: vec![],
             errors: vec![]
         }
     }
@@ -173,6 +175,7 @@ impl<'a> Template<'a> {
             fragments: ExtensibleMap::extend(fragments),
             parameters: HashMap::new(),
             tokens: vec![],
+            scopes: vec![],
             errors: vec![]
         }
     }
@@ -227,6 +230,7 @@ impl<'a> Template<'a> {
                     self.tokens.push(Token::Scope(scope));
                 },
                 Some(ReturnType::End) => {
+                    try!(self.end_scope());
                     self.tokens.push(Token::End);
                     self.tokens.push(Token::BeginAttribute(attribute.name.local, Content::String("".into())));
                 },
@@ -245,7 +249,10 @@ impl<'a> Template<'a> {
                         try!(self.reg_scope_vars(&scope));
                         self.tokens.push(Token::Scope(scope));
                     },
-                    ReturnType::End => self.tokens.push(Token::End),
+                    ReturnType::End => {
+                        try!(self.end_scope());
+                        self.tokens.push(Token::End);
+                    },
                 }
             }
 
@@ -272,6 +279,7 @@ impl<'a> Template<'a> {
                 self.tokens.push(Token::Scope(scope));
             },
             Some(ReturnType::End) => {
+                try!(self.end_scope());
                 self.tokens.push(Token::End);
                 self.tokens.push(Token::BeginText(Content::String("".into())))
             },
@@ -290,7 +298,10 @@ impl<'a> Template<'a> {
                     try!(self.reg_scope_vars(&scope));
                     self.tokens.push(Token::Scope(scope));
                 },
-                ReturnType::End => self.tokens.push(Token::End),
+                ReturnType::End => {
+                    try!(self.end_scope());
+                    self.tokens.push(Token::End);
+                }
             }
         }
         self.tokens.push(Token::EndText);
@@ -305,7 +316,12 @@ impl<'a> Template<'a> {
     fn reg_scope_vars(&mut self, scope: &Scope) -> Result<(), Cow<'static, str>> {
         match scope {
             &Scope::If(ref logic) => for p in logic.placeholders() {
-                try!(self.reg_placeholder(p.to_owned(), ContentType::Bool))
+                try!(self.reg_placeholder(p.to_owned(), ContentType::Bool));
+                self.scopes.push(None);
+            },
+            &Scope::ForEach(ref collection, ref element, ref opt_key) => {
+                try!(self.reg_placeholder(collection.clone(), ContentType::Collection(None, false)));
+                self.scopes.push(Some((collection.clone(), element.clone(), None, opt_key.clone())));
             }
         }
 
@@ -313,15 +329,46 @@ impl<'a> Template<'a> {
     }
 
     fn reg_placeholder(&mut self, param: String, pref_ty: ContentType) -> Result<(), Cow<'static, str>> {
+        for scope in self.scopes.iter_mut().rev() {
+            if let &mut Some((ref _origin, ref element, ref mut ty, ref opt_key)) = scope {
+                if element == &param {
+                    match ty {
+                        &mut Some(ref mut ty) => try!(ty.combine_with(pref_ty)),
+                        ty => *ty = Some(pref_ty)
+                    }
+
+                    return Ok(())
+                }
+
+                if let &Some(ref key) = opt_key {
+                    if key == &param {
+                        match pref_ty {
+                            ContentType::String(false) => return Ok(()),
+                            ty => return Err(Cow::Owned(format!("{} is a collection key and cannot be used as {}", param, ty)))
+                        }
+                    }
+                }
+            }
+        }
+
         match self.parameters.entry(param) {
-            Entry::Occupied(mut entry) => {
-                let new_ty = try!(entry.get().combined_with(pref_ty));
-                *entry.get_mut() = new_ty;
-            },
+            Entry::Occupied(mut entry) => try!(entry.get_mut().combine_with(pref_ty)),
             Entry::Vacant(entry) => { entry.insert(pref_ty); },
         }
 
         Ok(())
+    }
+
+    fn end_scope(&mut self) -> Result<(), Cow<'static, str>> {
+        if let Some(scope) = self.scopes.pop() {
+            if let Some((origin, _, ty, _)) = scope {
+                self.reg_placeholder(origin, ContentType::Collection(ty.map(|t| Box::new(t)), false))
+            } else {
+                Ok(())
+            }
+        } else {
+            Err(Cow::Borrowed("unexpected end of scope"))
+        }
     }
 }
 
@@ -393,6 +440,9 @@ fn init_fragments<'a>() -> HashMap<&'static str, Box<Fragment + 'a>> {
     map.insert(f.identifier(), Box::new(f));
 
     let f = fragments::Template;
+    map.insert(f.identifier(), Box::new(f));
+
+    let f = fragments::ForEach;
     map.insert(f.identifier(), Box::new(f));
 
     map

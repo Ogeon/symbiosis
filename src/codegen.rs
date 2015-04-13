@@ -21,20 +21,6 @@ macro_rules! line {
     )
 }
 
-macro_rules! gen_comb {
-    (match $e:expr {$($res:path: {$(($a:path,  $b:path)),*}),*}) => (
-        match $e {
-            $(
-                (&$res, $res) => Ok($res),
-                $(
-                    (&$a, $b) | (&$b, $a) => Ok($res),
-                )*
-            )*
-            (a, b) => Err(Cow::Owned(format!("content cannot be used as both {} and {}", a, b)))
-        }
-    )
-}
-
 ///Code generators are used to generate template code in different languages
 ///and they have to implement this trait.
 pub trait Codegen {
@@ -70,7 +56,10 @@ pub enum Token {
 pub enum Scope {
     ///Everything within an `if` scope will be hidden if the provided logic
     ///expression is false.
-    If(Logic)
+    If(Logic),
+    ///Repeat the content within the scope for each element in a collection.
+    ///Args: collection, element, optional key
+    ForEach(String, String, Option<String>)
 }
 
 ///Logic expressions.
@@ -131,48 +120,71 @@ pub enum Content {
 
 ///Types of template parameter content.
 pub enum ContentType {
-    ///A plain string.
-    String,
-    ///An optionally defined string.
-    OptionalString,
+    ///A plain (maybe optional) string.
+    String(bool),
     ///A boolean value.
     Bool,
-    ///An other template.
-    Template,
-    ///An optionally defined template.
-    OptionalTemplate
+    ///An other (maybe optional) template.
+    Template(bool),
+    ///A (maybe optional) collection of hopefully inferred content, associated with a key.
+    Collection(Option<Box<ContentType>>, bool)
 }
 
 impl ContentType {
-    pub fn combined_with(&self, pref_ty: ContentType) -> Result<ContentType, Cow<'static, str>> {
-        gen_comb!{
-            match (self, pref_ty) {
-                ContentType::String: {},
-                ContentType::OptionalString: {
-                    (ContentType::String, ContentType::Bool),
-                    (ContentType::OptionalString, ContentType::String),
-                    (ContentType::OptionalString, ContentType::Bool)
-                },
-                ContentType::Bool: {},
-                ContentType::Template: {},
-                ContentType::OptionalTemplate: {
-                    (ContentType::Template, ContentType::Bool),
-                    (ContentType::OptionalTemplate, ContentType::Template),
-                    (ContentType::OptionalTemplate, ContentType::Bool)
-                }
-            }
+    pub fn combine_with(&mut self, pref_ty: ContentType) -> Result<(), Cow<'static, str>> {
+        match (self, pref_ty) {
+            (this, ContentType::Bool) => this.set_optional(true),
+            (this @ &mut ContentType::Bool, mut other) => {
+                other.set_optional(true);
+                *this = other;
+            },
+            (&mut ContentType::String(ref mut a_o), ContentType::String(ref mut b_o)) => *a_o = *a_o | *b_o,
+            (&mut ContentType::Template(ref mut a_o), ContentType::Template(ref mut b_o)) => *a_o = *a_o | *b_o,
+            (&mut ContentType::Collection(ref mut a, ref mut a_o), ContentType::Collection(ref mut b, ref mut b_o)) => {
+                *a_o = *a_o | *b_o;
+                match (a, b.take()) {
+                    (&mut Some(ref mut a), ref mut b @ Some(_)) => try!(a.combine_with(*b.take().unwrap())),
+                    (a @ &mut None, b @ Some(_)) => *a = b,
+                    (&mut Some(_), None) |(&mut None, None)  => {}
+                };
+            },
+            (a, b) => return Err(Cow::Owned(format!("content cannot be used as both {} and {}", a, b)))
+        }
+
+        Ok(())
+    }
+
+    pub fn is_optional(&self) -> bool {
+        match self {
+            &ContentType::String(optional) => optional,
+            &ContentType::Bool => false,
+            &ContentType::Template(optional) => optional,
+            &ContentType::Collection(_, optional) => optional,
+        }
+    }
+
+    fn set_optional(&mut self, optional: bool) {
+        match self {
+            &mut ContentType::String(ref mut o) => *o = optional,
+            &mut ContentType::Bool => {},
+            &mut ContentType::Template(ref mut o) => *o = optional,
+            &mut ContentType::Collection(_, ref mut o) => *o = optional,
         }
     }
 }
 
 impl fmt::Display for ContentType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self.is_optional() {
+            try!("optional ".fmt(f))
+        }
+
         match self {
-            &ContentType::String => "string".fmt(f),
-            &ContentType::OptionalString => "optional string".fmt(f),
+            &ContentType::String(_) => "string".fmt(f),
             &ContentType::Bool => "boolean value".fmt(f),
-            &ContentType::Template => "template".fmt(f),
-            &ContentType::OptionalTemplate => "optional template".fmt(f)
+            &ContentType::Template(_) => "template".fmt(f),
+            &ContentType::Collection(Some(ref a), _) => write!(f, "collection of {}", a),
+            &ContentType::Collection(None, _) => "collection of unknown content type".fmt(f),
         }
     }
 }

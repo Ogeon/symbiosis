@@ -14,6 +14,11 @@ pub enum Visibility {
     Private
 }
 
+enum ParamTy {
+    Param,
+    Scope
+}
+
 ///Code generator for Rust templates.
 pub struct Rust<'a> {
     ///Generate a submodule. Defaults to none and should only be used when a
@@ -62,8 +67,8 @@ impl<'a> Rust<'a> {
             },
             &Logic::Value(ref val) => {
                 match params.get(val) {
-                    Some(&ContentType::String) | Some(&ContentType::Template) => try!(write!(w, "true")),
-                    Some(&ContentType::OptionalString) | Some(&ContentType::OptionalTemplate) => try!(write!(w, "self.{}.is_some()", val)),
+                    Some(&ContentType::String(false)) | Some(&ContentType::Template(false)) | Some(&ContentType::Collection(_, false)) => try!(write!(w, "true")),
+                    Some(&ContentType::String(true)) | Some(&ContentType::Template(true)) | Some(&ContentType::Collection(_, true)) => try!(write!(w, "self.{}.is_some()", val)),
                     Some(&ContentType::Bool) => try!(write!(w, "self.{}", val)),
                     None => {}
                 }
@@ -93,6 +98,7 @@ impl<'a> Codegen for Rust<'a> {
 
         let mut string_buf = String::new();
         let mut fmt_args = vec![];
+        let mut scopes = vec![];
 
         if public {
             if params.len() > 0 {
@@ -109,13 +115,10 @@ impl<'a> Codegen for Rust<'a> {
         }
 
         for (parameter, ty) in params {
-            match ty {
-                &ContentType::String => line!(w, indent + 1, "pub {}: &'a str,", parameter),
-                &ContentType::OptionalString => line!(w, indent + 1, "pub {}: Option<&'a str>,", parameter),
-                &ContentType::Bool => line!(w, indent + 1, "pub {}: bool,", parameter),
-                &ContentType::Template => line!(w, indent + 1, "pub {}: &'a ::symbiosis_rust::Template,", parameter),
-                &ContentType::OptionalTemplate => line!(w, indent + 1, "pub {}: Option<&'a ::symbiosis_rust::Template>,", parameter),
-            }
+            try!(write_indent(w, indent + 1));
+            try!(write!(w, "pub {}: ", parameter));
+            try!(write_ty(w, ty));
+            try!(write!(w, ",\n"));
         }
         
         if params.len() > 0 {
@@ -157,80 +160,166 @@ impl<'a> Codegen for Rust<'a> {
                 &Token::BeginAttribute(ref name, ref content) => match content {
                     &Content::String(ref content) => try!(write!(&mut string_buf, " {}=\\\"{}", name.as_slice(), content)),
                     &Content::Placeholder(ref placeholder) => {
-
-                        match params.get(placeholder) {
-                            Some(&ContentType::String) => {
+                        match find_param(placeholder, params, &scopes) {
+                            Some((param_ty, Some(&ContentType::String(false)))) | Some((param_ty, None)) => {
                                 try!(write!(&mut string_buf, " {}=\\\"{{}}", name.as_slice()));
-                                fmt_args.push(format!("self.{}", placeholder));
+                                if let ParamTy::Param = param_ty {
+                                    fmt_args.push(format!("self.{}", placeholder));
+                                } else {
+                                    fmt_args.push(placeholder.clone());
+                                }
                             },
-                            Some(&ContentType::OptionalString) => {
+                            Some((param_ty, Some(&ContentType::String(true)))) => {
                                 try!(write!(&mut string_buf, " {}=\\\"", name.as_slice()));
                                 try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
 
-                                line!(w, indent, "if let Some(val) = self.{} {{", placeholder);
+                                if let ParamTy::Param = param_ty {
+                                    line!(w, indent, "if let Some(val) = self.{} {{", placeholder);
+                                } else {
+                                    line!(w, indent, "if let Some(val) = {} {{", placeholder);
+                                }
+
                                 line!(w, indent + 1, "try!(write!(writer, \"{{}}\", val));");
                                 line!(w, indent, "}}");
                             },
-                            Some(&ContentType::Template) => {
+                            Some((param_ty, Some(&ContentType::Template(false)))) => {
                                 try!(write!(&mut string_buf, " {}=\\\"", name.as_slice()));
                                 try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
 
-                                line!(w, indent, "try!(self.{}.render_to(writer));", placeholder);
+                                if let ParamTy::Param = param_ty {
+                                    line!(w, indent, "try!(self.{}.render_to(writer));", placeholder);
+                                } else {
+                                    line!(w, indent, "try!({}.render_to(writer));", placeholder);
+                                }
                             },
-                            Some(&ContentType::OptionalTemplate) => {
+                            Some((param_ty, Some(&ContentType::Template(true)))) => {
                                 try!(write!(&mut string_buf, " {}=\\\"", name.as_slice()));
                                 try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
 
-                                line!(w, indent, "if let Some(template) = self.{} {{", placeholder);
+                                if let ParamTy::Param = param_ty {
+                                    line!(w, indent, "if let Some(template) = self.{} {{", placeholder);
+                                } else {
+                                    line!(w, indent, "if let Some(template) = {} {{", placeholder);
+                                }
+
                                 line!(w, indent + 1, "try!(template.render_to(writer));");
                                 line!(w, indent, "}}");
                             },
-                            Some(&ContentType::Bool) => return Err(Error::Parse(vec![Cow::Borrowed("boolean values cannot be rendered as text")])),
-                            None => {}
+                            Some((_, Some(&ContentType::Bool))) => return Err(Error::Parse(vec![Cow::Borrowed("boolean values cannot be rendered as text")])),
+                            Some((_, Some(&ContentType::Collection(_, _)))) => return Err(Error::Parse(vec![Cow::Borrowed("collections cannot be rendered as text")])),
+                            None => return Err(Error::Parse(vec![Cow::Owned(format!("{} was never defined", placeholder))]))
                         }
                     }
                 },
                 &Token::AppendToAttribute(ref text) | &Token::BeginText(ref text) | &Token::AppendToText(ref text) => match text {
                     &Content::String(ref content) => try!(write!(&mut string_buf, "{}", content)),
                     &Content::Placeholder(ref placeholder) => {
-                        match params.get(placeholder) {
-                            Some(&ContentType::String) => {
+                        match find_param(placeholder, params, &scopes) {
+                            Some((param_ty, Some(&ContentType::String(false)))) | Some((param_ty, None)) => {
                                 try!(write!(&mut string_buf, "{{}}"));
-                                fmt_args.push(format!("self.{}", placeholder));
+                                if let ParamTy::Param = param_ty {
+                                    fmt_args.push(format!("self.{}", placeholder));
+                                } else {
+                                    fmt_args.push(placeholder.clone());
+                                }
                             },
-                            Some(&ContentType::OptionalString) => {
+                            Some((param_ty, Some(&ContentType::String(true)))) => {
                                 try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
 
-                                line!(w, indent, "if let Some(val) = self.{} {{", placeholder);
+                                if let ParamTy::Param = param_ty {
+                                    line!(w, indent, "if let Some(val) = self.{} {{", placeholder);
+                                } else {
+                                    line!(w, indent, "if let Some(val) = {} {{", placeholder);
+                                }
+
                                 line!(w, indent + 1, "try!(write!(writer, \"{{}}\", val));");
                                 line!(w, indent, "}}");
                             },
-                            Some(&ContentType::Template) => {
+                            Some((param_ty, Some(&ContentType::Template(false)))) => {
                                 try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
 
-                                line!(w, indent, "try!(self.{}.render_to(writer));", placeholder);
+                                if let ParamTy::Param = param_ty {
+                                    line!(w, indent, "try!(self.{}.render_to(writer));", placeholder);
+                                } else {
+                                    line!(w, indent, "try!({}.render_to(writer));", placeholder);
+                                }
                             },
-                            Some(&ContentType::OptionalTemplate) => {
+                            Some((param_ty, Some(&ContentType::Template(true)))) => {
                                 try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
 
-                                line!(w, indent, "if let Some(template) = self.{} {{", placeholder);
+                                if let ParamTy::Param = param_ty {
+                                    line!(w, indent, "if let Some(template) = self.{} {{", placeholder);
+                                } else {
+                                    line!(w, indent, "if let Some(template) = {} {{", placeholder);
+                                }
+
                                 line!(w, indent + 1, "try!(template.render_to(writer));");
                                 line!(w, indent, "}}");
                             },
-                            Some(&ContentType::Bool) => return Err(Error::Parse(vec![Cow::Borrowed("boolean values cannot be rendered as text")])),
-                            None => {}
+                            Some((_, Some(&ContentType::Bool))) => return Err(Error::Parse(vec![Cow::Borrowed("boolean values cannot be rendered as text")])),
+                            Some((_, Some(&ContentType::Collection(_, _)))) => return Err(Error::Parse(vec![Cow::Borrowed("collections cannot be rendered as text")])),
+                            None => return Err(Error::Parse(vec![Cow::Owned(format!("{} was never defined", placeholder))]))
                         }
                     }
                 },
                 &Token::EndAttribute => try!(write!(&mut string_buf, "\\\"")),
                 &Token::EndText => {},
                 &Token::Scope(Scope::If(ref cond)) => {
+                    scopes.push(None);
                     try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
 
                     try!(write_indent(w, indent));
                     try!(write!(w, "if "));
                     try!(self.eval_logic(w, true, &cond.flattened(), params));
                     try!(write!(w, " {{\n"));
+                    indent += 1;
+                },
+                &Token::Scope(Scope::ForEach(ref collection, ref element, ref opt_key)) => {
+                    try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
+
+                    match find_param(collection, params, &scopes) {
+                        Some((param_ty, content_ty)) => {
+                            match content_ty {
+                                Some(&ContentType::Collection(ref ty, optional)) => {
+                                    try!(write_indent(w, indent));
+
+                                    if let &Some(ref key) = opt_key {
+                                        try!(write!(w, "for ({}, {})", key, element));
+                                    } else {
+                                        try!(write!(w, "for {}", element));
+                                    }
+
+                                    if let ParamTy::Param = param_ty {
+                                        try!(write!(w, " in self.{}", collection));
+                                    } else {
+                                        try!(write!(w, " in {}", collection));
+                                    }
+
+                                    if optional {
+                                        try!(write!(w, ".iter().flat_map(|c| c.values())"));
+                                    } else {
+                                        try!(write!(w, ".values()"));
+                                    }
+
+                                    if opt_key.is_some() {
+                                        try!(write!(w, ".enumerate() {{\n"));
+                                    } else {
+                                        try!(write!(w, " {{\n"));
+                                    }
+
+                                    if let &Some(ref ty) = ty {
+                                        scopes.push(Some((element, ty, opt_key.as_ref())));
+                                    } else {
+                                        return Err(Error::Parse(vec![Cow::Owned(format!("content type of {} could not be inferred (is it used anywhere?)", collection))]))
+                                    }
+                                },
+                                Some(ty) => return Err(Error::Parse(vec![Cow::Owned(format!("expected {} to be a collection, but found {}", collection, ty))])),
+                                None => return Err(Error::Parse(vec![Cow::Owned(format!("expected {} to be a collection, but found a collection key", collection))]))
+                            }
+                        },
+                        None => return Err(Error::Parse(vec![Cow::Owned(format!("{} is not defined", collection))])),
+                    }
+
                     indent += 1;
                 },
                 &Token::End => {
@@ -302,4 +391,46 @@ fn write_and_clear_fmt<W: Write>(w: &mut W, indent: u8, buf: &mut String, args: 
     }
 
     Ok(())
+}
+
+fn write_ty<W: Write>(w: &mut W, ty: &ContentType) -> Result<(), Error> {
+    if ty.is_optional() {
+        try!(write!(w, "Option<"));
+    }
+
+    match ty {
+        &ContentType::String(_) => try!(write!(w, "&'a str")),
+        &ContentType::Bool => try!(write!(w, "bool")),
+        &ContentType::Template(_) => try!(write!(w, "&'a ::symbiosis_rust::Template")),
+        &ContentType::Collection(Some(ref inner), _) => {
+            try!(write!(w, "&'a ::symbiosis_rust::Collection<'a, "));
+            try!(write_ty(w, inner));
+            try!(write!(w, ">"));
+        },
+        &ContentType::Collection(None, _) => {
+            return Err(Error::Parse(vec![Cow::Borrowed("type of collection content could not be inferred (is it used anywhere?)")]))
+        }
+    }
+
+    if ty.is_optional() {
+        try!(write!(w, ">"));
+    }
+
+    Ok(())
+}
+
+fn find_param<'a>(param: &str, params: &'a HashMap<String, ContentType>, scopes: &[Option<(&str, &'a ContentType, Option<&String>)>]) -> Option<(ParamTy, Option<&'a ContentType>)> {
+    for scope in scopes.iter().rev() {
+        if let &Some((ref name, ref ty, ref opt_key)) = scope {
+            if *name == param {
+                return Some((ParamTy::Scope,Some(ty)));
+            } else if let &Some(ref key) = opt_key {
+                if *key == param {
+                    return Some((ParamTy::Scope, None))
+                }
+            }
+        }
+    }
+
+    params.get(param).map(|t| (ParamTy::Param,Some(t)))
 }

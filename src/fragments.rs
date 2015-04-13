@@ -169,8 +169,54 @@ impl_fragment!{
         }
 
         match args.into_iter().next().unwrap() {
-            InputType::Placeholder(name, _) => Ok(ReturnType::Placeholder(name, ContentType::Template)),
+            InputType::Placeholder(name, _) => Ok(ReturnType::Placeholder(name, ContentType::Template(false))),
             InputType::Logic(_) => Err(Cow::Borrowed("template expected a placeholder, but found a logic expression"))
+        }
+    }
+}
+
+impl_fragment!{
+    #[doc = "Start of a `foreach` scope."]
+    #[doc = ""]
+    #[doc = "`foreach(element, collection)` or `foreach(key, element, collection)` will repeat"]
+    #[doc = "everything within the scope for each `element` (and `key`) in `collection`."]
+    frag "foreach" => ForEach: |args| {
+        let mut args = args.into_iter();
+        let args = (args.next(), args.next(), args.next());
+        
+        match args {
+            (Some(element), Some(collection), None) => {
+                let element = match element {
+                    InputType::Placeholder(name, _) => name,
+                    InputType::Logic(_) => return Err(Cow::Borrowed("foreach expected a placeholder as `element`, but found a logic expression"))
+                };
+
+                let collection = match collection {
+                    InputType::Placeholder(name, _) => name,
+                    InputType::Logic(_) => return Err(Cow::Borrowed("foreach expected a placeholder as `collection`, but found a logic expression"))
+                };
+
+                Ok(ReturnType::Scope(Scope::ForEach(collection, element, None)))
+            },
+            (Some(key), Some(element), Some(collection)) => {
+                let key = match key {
+                    InputType::Placeholder(name, _) => name,
+                    InputType::Logic(_) => return Err(Cow::Borrowed("foreach expected a placeholder as `key`, but found a logic expression"))
+                };
+
+                let element = match element {
+                    InputType::Placeholder(name, _) => name,
+                    InputType::Logic(_) => return Err(Cow::Borrowed("foreach expected a placeholder as `element`, but found a logic expression"))
+                };
+
+                let collection = match collection {
+                    InputType::Placeholder(name, _) => name,
+                    InputType::Logic(_) => return Err(Cow::Borrowed("foreach expected a placeholder as `collection`, but found a logic expression"))
+                };
+
+                Ok(ReturnType::Scope(Scope::ForEach(collection, element, Some(key))))
+            },
+            _ => Err(Cow::Borrowed("foreach will only accept two or three argumens"))
         }
     }
 }

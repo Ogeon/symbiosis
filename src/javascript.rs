@@ -1,7 +1,7 @@
 use std::io::Write;
 use std::collections::HashMap;
 use std::default::Default;
-use std::borrow::Cow;
+use std::borrow::{Cow, ToOwned};
 
 use string_cache::atom::Atom;
 
@@ -99,10 +99,12 @@ impl<'a> Codegen for JavaScript<'a> {
 
         for (parameter, ty) in params {
             match ty {
-                &ContentType::String => line!(w, indent + 1, "this.{} = \"\";", parameter),
-                &ContentType::OptionalString => line!(w, indent + 1, "this.{} = null;", parameter),
+                &ContentType::String(false) => line!(w, indent + 1, "this.{} = \"\";", parameter),
+                &ContentType::String(true) => line!(w, indent + 1, "this.{} = null;", parameter),
                 &ContentType::Bool => line!(w, indent + 1, "this.{} = false;", parameter),
-                &ContentType::Template | &ContentType::OptionalTemplate => line!(w, indent + 1, "this.{} = null;", parameter)
+                &ContentType::Template(_) => line!(w, indent + 1, "this.{} = null;", parameter),
+                &ContentType::Collection(_, false) => line!(w, indent + 1, "this.{} = [];", parameter),
+                &ContentType::Collection(_, true) => line!(w, indent + 1, "this.{} = null;", parameter)
             }
         }
 
@@ -113,6 +115,7 @@ impl<'a> Codegen for JavaScript<'a> {
         let mut element_stack = vec![];
         let mut attribute_var = (Atom::from_slice(""), String::new());
         let mut text_var = String::new();
+        let mut scopes = vec![];
 
         if let Some(namespace) = self.namespace {
             line!(w, indent, "{}.{}.prototype.render_to = function(root) {{", namespace, name);
@@ -153,17 +156,28 @@ impl<'a> Codegen for JavaScript<'a> {
                     match content {
                         &Content::String(ref content) => line!(w, indent, "var {} = \"{}\";", attribute_var.1, content),
                         &Content::Placeholder(ref placeholder) => {
-                            match params.get(placeholder) {
-                                Some(&ContentType::String) | Some(&ContentType::OptionalString) | Some(&ContentType::Bool) => {
+                            match find_param(placeholder, params, &scopes) {
+                                Some((alias, Some(&ContentType::String(_)))) | Some((alias, Some(&ContentType::Bool))) | Some((alias, None)) => {
                                     line!(w, indent, "var {};", attribute_var.1);
-                                    line!(w, indent, "if(this.{} !== null) {{", placeholder);
-                                    line!(w, indent + 1, "{} = this.{};", attribute_var.1, placeholder);
+                                    match alias {
+                                        Some(alias) => {
+                                            line!(w, indent, "if({} !== null) {{", alias);
+                                            line!(w, indent + 1, "{} = {};", attribute_var.1, alias);
+                                        },
+                                        None => {
+                                            line!(w, indent, "if(this.{} !== null) {{", placeholder);
+                                            line!(w, indent + 1, "{} = this.{};", attribute_var.1, placeholder);
+                                        }
+                                    }
                                     line!(w, indent, "}} else {{");
                                     line!(w, indent + 1, "{} = \"\";", attribute_var.1);
                                     line!(w, indent, "}}");
                                 },
-                                Some(&ContentType::Template) | Some(&ContentType::OptionalTemplate) => {
+                                Some((_, Some(&ContentType::Template(_)))) => {
                                     return Err(Error::Parse(vec![Cow::Borrowed("templates are not supported in attributes")]));
+                                },
+                                Some((_, Some(&ContentType::Collection(_, _)))) => {
+                                    return Err(Error::Parse(vec![Cow::Borrowed("collections cannot be used as text")]));
                                 },
                                 None => {}
                             }
@@ -174,14 +188,25 @@ impl<'a> Codegen for JavaScript<'a> {
                     match content {
                         &Content::String(ref content) => line!(w, indent, "{} += \"{}\";", attribute_var.1, content),
                         &Content::Placeholder(ref placeholder) => {
-                            match params.get(placeholder) {
-                                Some(&ContentType::String) | Some(&ContentType::OptionalString) | Some(&ContentType::Bool) => {
-                                    line!(w, indent, "if(this.{} !== null) {{", placeholder);
-                                    line!(w, indent + 1, "{} += this.{};", attribute_var.1, placeholder);
+                            match find_param(placeholder, params, &scopes) {
+                                Some((alias, Some(&ContentType::String(_)))) | Some((alias, Some(&ContentType::Bool))) | Some((alias, None)) => {
+                                    match alias {
+                                        Some(alias) => {
+                                            line!(w, indent, "if({} !== null) {{", alias);
+                                            line!(w, indent + 1, "{} += {};", attribute_var.1, alias);
+                                        },
+                                        None => {
+                                            line!(w, indent, "if(this.{} !== null) {{", placeholder);
+                                            line!(w, indent + 1, "{} += this.{};", attribute_var.1, placeholder);
+                                        }
+                                    }
                                     line!(w, indent, "}}");
                                 },
-                                Some(&ContentType::Template) | Some(&ContentType::OptionalTemplate) => {
+                                Some((_, Some(&ContentType::Template(_)))) => {
                                     return Err(Error::Parse(vec![Cow::Borrowed("templates are not supported in attributes")]));
+                                },
+                                Some((_, Some(&ContentType::Collection(_, _)))) => {
+                                    return Err(Error::Parse(vec![Cow::Borrowed("collections cannot be used as text")]));
                                 },
                                 None => {}
                             }
@@ -199,24 +224,46 @@ impl<'a> Codegen for JavaScript<'a> {
                     match content {
                         &Content::String(ref content) => line!(w, indent, "var {} = \"{}\";", text_var, content),
                         &Content::Placeholder(ref placeholder) => {
-                            match params.get(placeholder) {
-                                Some(&ContentType::String) | Some(&ContentType::OptionalString) | Some(&ContentType::Bool) => {
+                            match find_param(placeholder, params, &scopes) {
+                                Some((alias, Some(&ContentType::String(_)))) | Some((alias, Some(&ContentType::Bool))) | Some((alias, None)) => {
                                     line!(w, indent, "var {};", text_var);
-                                    line!(w, indent, "if(this.{} !== null) {{", placeholder);
-                                    line!(w, indent + 1, "{} = this.{};", text_var, placeholder);
+                                    match alias {
+                                        Some(alias) => {
+                                            line!(w, indent, "if({} !== null) {{", alias);
+                                            line!(w, indent + 1, "{} = {};", text_var, alias);
+                                        },
+                                        None => {
+                                            line!(w, indent, "if(this.{} !== null) {{", placeholder);
+                                            line!(w, indent + 1, "{} = this.{};", text_var, placeholder);
+                                        }
+                                    }
                                     line!(w, indent, "}} else {{");
                                     line!(w, indent + 1, "{} = \"\";", text_var);
                                     line!(w, indent, "}}");
                                 },
-                                Some(&ContentType::Template) | Some(&ContentType::OptionalTemplate) => {
-                                    line!(w, indent, "if(this.{} !== null) {{", placeholder);
+                                Some((alias, Some(&ContentType::Template(_)))) => {
+                                    match alias {
+                                        Some(alias) => {
+                                            line!(w, indent, "if({} !== null) {{", alias);
+                                            try!(write_indent(w, indent));
+                                            try!(write!(w, "{}", alias));
+                                        },
+                                        None => {
+                                            line!(w, indent, "if(this.{} !== null) {{", placeholder);
+                                            try!(write_indent(w, indent));
+                                            try!(write!(w, "this.{}", placeholder));
+                                        }
+                                    }
                                     if let Some(element) = element_stack.last() {
-                                        line!(w, indent + 1, "this.{}.render_to({});", placeholder, element);
+                                        try!(write!(w, ".render_to({});", element));
                                     } else {
-                                        line!(w, indent + 1, "this.{}.render_to(root);", placeholder);
+                                        try!(write!(w, ".render_to(root);"));
                                     }
                                     line!(w, indent, "}}");
                                     line!(w, indent, "var {};", text_var);
+                                },
+                                Some((_, Some(&ContentType::Collection(_, _)))) => {
+                                    return Err(Error::Parse(vec![Cow::Borrowed("collections cannot be used as text")]));
                                 },
                                 None => {}
                             }
@@ -227,23 +274,56 @@ impl<'a> Codegen for JavaScript<'a> {
                     match content {
                         &Content::String(ref content) => line!(w, indent, "{} += \"{}\";", text_var, content),
                         &Content::Placeholder(ref placeholder) => {
-                            match params.get(placeholder) {
-                                Some(&ContentType::String) | Some(&ContentType::OptionalString) | Some(&ContentType::Bool) => {
-                                    line!(w, indent, "if(this.{} !== null) {{", placeholder);
-                                    line!(w, indent + 1, "{} += this.{};", text_var, placeholder);
+                            match find_param(placeholder, params, &scopes) {
+                                Some((alias, Some(&ContentType::String(_)))) | Some((alias, Some(&ContentType::Bool))) | Some((alias, None)) => {
+                                    match alias {
+                                        Some(alias) => {
+                                            line!(w, indent, "if({} !== null) {{", alias);
+                                            line!(w, indent + 1, "{} += {};", text_var, alias);
+                                        },
+                                        None => {
+                                            line!(w, indent, "if(this.{} !== null) {{", placeholder);
+                                            line!(w, indent + 1, "{} += this.{};", text_var, placeholder);
+                                        }
+                                    }
                                     line!(w, indent, "}}");
                                 },
-                                Some(&ContentType::Template) | Some(&ContentType::OptionalTemplate) => {
-                                    line!(w, indent, "if(this.{} !== null) {{", placeholder);
+                                Some((alias, Some(&ContentType::Template(_)))) => {
+                                    match alias {
+                                        Some(alias) => {
+                                            line!(w, indent, "if({} !== null) {{", alias);
+                                        },
+                                        None => {
+                                            line!(w, indent, "if(this.{} !== null) {{", placeholder);
+                                        }
+                                    }
                                     if let Some(element) = element_stack.last() {
                                         line!(w, indent + 1, "{}.appendChild(document.createTextNode({}));", element, text_var);
-                                        line!(w, indent + 1, "this.{}.render_to({});", placeholder, element);
                                     } else {
                                         line!(w, indent + 1, "root.appendChild(document.createTextNode({}));", text_var);
-                                        line!(w, indent + 1, "this.{}.render_to(root);", placeholder);
+                                    }
+                                    match alias {
+                                        Some(alias) => {
+                                            line!(w, indent, "if({} !== null) {{", alias);
+                                            try!(write_indent(w, indent));
+                                            try!(write!(w, "{}", alias));
+                                        },
+                                        None => {
+                                            line!(w, indent, "if(this.{} !== null) {{", placeholder);
+                                            try!(write_indent(w, indent));
+                                            try!(write!(w, "this.{}", placeholder));
+                                        }
+                                    }
+                                    if let Some(element) = element_stack.last() {
+                                        try!(write!(w, ".render_to({});", element));
+                                    } else {
+                                        try!(write!(w, ".render_to(root);"));
                                     }
                                     line!(w, indent + 1, "{} = \"\";", text_var);
                                     line!(w, indent, "}}");
+                                },
+                                Some((_, Some(&ContentType::Collection(_, _)))) => {
+                                    return Err(Error::Parse(vec![Cow::Borrowed("collections cannot be used as text")]));
                                 },
                                 None => {}
                             }
@@ -263,10 +343,45 @@ impl<'a> Codegen for JavaScript<'a> {
                     try!(self.eval_logic(w, true, &cond.flattened(), params));
                     try!(write!(w, ") {{\n"));
                     indent += 1;
+                    scopes.push(None);
+                },
+                &Token::Scope(Scope::ForEach(ref collection, ref element, ref opt_key)) => {
+                    let key = match opt_key {
+                        &Some(ref k) => format!("key_{}_{}", to_valid_ident(k), var_counter),
+                        &None => format!("key_{}", var_counter)
+                    };
+                    let value = format!("elem_{}_{}", to_valid_ident(element), var_counter);
+
+                    let (collection_name, ty) = match find_param(collection, params, &scopes) {
+                        Some((Some(ref name), Some(&ContentType::Collection(ref ty, _)))) => ((*name).to_owned(), ty),
+                        Some((None, Some(&ContentType::Collection(ref ty, _)))) => (format!("this.{}", collection), ty),
+                        Some((_, Some(ty))) => return Err(Error::Parse(vec![Cow::Owned(format!("expected {} to be a collection, but found {}", collection, ty))])),
+                        Some((_, None)) => return Err(Error::Parse(vec![Cow::Owned(format!("expected {} to be a collection, but found a collection key", collection))])),
+                        None => return Err(Error::Parse(vec![Cow::Owned(format!("{} was never defined", collection))]))
+                    };
+
+                    var_counter += 1;
+
+                    line!(w, indent, "var {}", key);
+                    line!(w, indent, "for({} in {}) {{", key, collection_name);
+                    indent += 1;
+                    line!(w, indent, "if({}.hasOwnProperty({})) {{", collection_name, key);
+                    indent += 1;
+                    line!(w, indent, "var {} = {}[{}];", value, collection_name, key);
+
+                    if let &Some(ref ty) = ty {
+                        scopes.push(Some((element, value, ty, opt_key.as_ref().map(|k| (k, key)))));
+                    } else {
+                        return Err(Error::Parse(vec![Cow::Owned(format!("content type of {} could not be inferred (is it used anywhere?)", collection))]));
+                    }
                 },
                 &Token::End => {
                     indent -= 1;
                     line!(w, indent, "}}");
+                    if let Some(Some(_)) = scopes.pop() {
+                        indent -= 1;
+                        line!(w, indent, "}}");
+                    }
                 }
             }
         }
@@ -295,4 +410,20 @@ impl<'a> Codegen for JavaScript<'a> {
 
 fn to_valid_ident(name: &str) -> String {
     name.chars().map(|c| if !c.is_alphanumeric() { '_' } else { c }).collect()
+}
+
+fn find_param<'a, 'b>(param: &str, params: &'a HashMap<String, ContentType>, scopes: &'b [Option<(&'a str, String, &'a ContentType, Option<(&'a String, String)>)>]) -> Option<(Option<&'b str>, Option<&'a ContentType>)> {
+    for scope in scopes.iter().rev() {
+        if let &Some((ref name, ref alias, ref ty, ref opt_key)) = scope {
+            if *name == param {
+                return Some((Some(alias), Some(ty)));
+            } else if let &Some((ref key, ref alias)) = opt_key {
+                if *key == param {
+                    return Some((Some(alias), None))
+                }
+            }
+        }
+    }
+
+    params.get(param).map(|t| (None, Some(t)))
 }
