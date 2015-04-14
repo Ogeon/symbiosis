@@ -211,7 +211,7 @@ impl<'a> Codegen for Rust<'a> {
                         }
                     }
                 },
-                &Token::AppendToAttribute(ref text) | &Token::BeginText(ref text) | &Token::AppendToText(ref text) => match text {
+                &Token::AppendToAttribute(ref text) | &Token::Text(ref text) => match text {
                     &Content::String(ref content) => try!(write!(&mut string_buf, "{}", content)),
                     &Content::Placeholder(ref placeholder) => {
                         match find_param(placeholder, params, &scopes) {
@@ -263,7 +263,6 @@ impl<'a> Codegen for Rust<'a> {
                     }
                 },
                 &Token::EndAttribute => try!(write!(&mut string_buf, "\\\"")),
-                &Token::EndText => {},
                 &Token::Scope(Scope::If(ref cond)) => {
                     scopes.push(None);
                     try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));

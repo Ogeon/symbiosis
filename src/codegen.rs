@@ -45,9 +45,7 @@ pub enum Token {
     BeginAttribute(Atom, Content),
     AppendToAttribute(Content),
     EndAttribute,
-    BeginText(Content),
-    AppendToText(Content),
-    EndText,
+    Text(Content),
     Scope(Scope),
     End,
 }

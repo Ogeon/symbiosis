@@ -136,9 +136,7 @@ impl<'a> Codegen for JavaScript<'a> {
                 t @ &Token::BeginAttribute(_, _) |
                 t @ &Token::AppendToAttribute(_) |
                 t @ &Token::EndAttribute |
-                t @ &Token::BeginText(_) |
-                t @ &Token::AppendToText(_) |
-                t @ &Token::EndText => {
+                t @ &Token::Text(_) => {
                     if let Some(ref mut tree) = tree_stack.last_mut() {
                         tree.tokens.push(JsToken::Statement((t, false)));
                     }
@@ -234,7 +232,7 @@ impl<'a> Codegen for JavaScript<'a> {
                             line!(w, indent, "{}.setAttribute(\"{}\", {});", tag, attribute_var.0.as_slice(), attribute_var.1);
                         }
                     },
-                    &Token::BeginText(ref content) | &Token::AppendToText(ref content) => {
+                    &Token::Text(ref content) => {
                         if let Some(text) = text.last_mut() {
                             if text.is_none() && !inherit_text {
                                 let text_var = format!("text_{}", var_counter);
@@ -255,7 +253,6 @@ impl<'a> Codegen for JavaScript<'a> {
                             }
                         }
                     },
-                    &Token::EndText => {},
                     &Token::Scope(Scope::If(ref cond)) => {
                         if let Some(text) = text.last_mut() {
                             if text.is_none() && !inherit_text {
@@ -263,6 +260,11 @@ impl<'a> Codegen for JavaScript<'a> {
                                 var_counter += 1;
                                 line!(w, indent, "var {} = \"\";", text_var);
                                 *text = Some((text_var, TextState::Cleared));
+                            } else if let &mut Some((ref text_var, ref mut state)) = text {
+                                if state.has_leftovers() {
+                                    line!(w, indent, "{} = \"\"", text_var);
+                                    *state = TextState::Cleared;
+                                }
                             }
                         }
 
@@ -276,6 +278,12 @@ impl<'a> Codegen for JavaScript<'a> {
                         scopes.push(None);
                     },
                     &Token::Scope(Scope::ForEach(ref collection, ref element, ref opt_key)) => {
+                        if let (Some(&mut Some((ref text_var, ref mut state))), Some(tag)) = (text.last_mut(), tags.last()) {
+                            try!(append_text(w, indent, text_var, state, tag));
+                            line!(w, indent, "{} = \"\"", text_var);
+                            *state = TextState::Cleared;
+                        }
+                        
                         if let Some(text) = text.last_mut() {
                             if text.is_none() && !inherit_text {
                                 let text_var = format!("text_{}", var_counter);
@@ -283,10 +291,6 @@ impl<'a> Codegen for JavaScript<'a> {
                                 line!(w, indent, "var {} = \"\";", text_var);
                                 *text = Some((text_var, TextState::Cleared));
                             }
-                        }
-
-                        if let (Some(&mut Some((ref text_var, ref mut state))), Some(tag)) = (text.last_mut(), tags.last()) {
-                            try!(append_text(w, indent, text_var, state, tag));
                         }
 
                         text.push(None);

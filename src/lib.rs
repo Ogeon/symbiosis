@@ -267,31 +267,29 @@ impl<'a> Template<'a> {
     fn add_text(&mut self, text: String) -> Result<(), Cow<'static, str>> {
         let mut content = try!(parser::parse_content(&text, &self.fragments)).into_iter();
         match content.next() {
-            Some(ReturnType::String(text)) => self.tokens.push(Token::BeginText(Content::String(text))),
+            Some(ReturnType::String(text)) => self.tokens.push(Token::Text(Content::String(text))),
             Some(ReturnType::Placeholder(name, ty)) => {
                 try!(self.reg_placeholder(name.clone(), ty));
-                self.tokens.push(Token::BeginText(Content::Placeholder(name)));
+                self.tokens.push(Token::Text(Content::Placeholder(name)));
             },
             Some(ReturnType::Logic(_)) => return Err(Cow::Borrowed("logic can not be used as text")),
             Some(ReturnType::Scope(scope)) => {
-                self.tokens.push(Token::BeginText(Content::String("".into())));
                 try!(self.reg_scope_vars(&scope));
                 self.tokens.push(Token::Scope(scope));
             },
             Some(ReturnType::End) => {
                 try!(self.end_scope());
                 self.tokens.push(Token::End);
-                self.tokens.push(Token::BeginText(Content::String("".into())))
             },
             None => return Ok(())
         }
 
         for part in content {
             match part {
-                ReturnType::String(text) => self.tokens.push(Token::AppendToText(Content::String(text))),
+                ReturnType::String(text) => self.tokens.push(Token::Text(Content::String(text))),
                 ReturnType::Placeholder(name, ty) => {
                     try!(self.reg_placeholder(name.clone(), ty));
-                    self.tokens.push(Token::AppendToText(Content::Placeholder(name)));
+                    self.tokens.push(Token::Text(Content::Placeholder(name)));
                 },
                 ReturnType::Logic(_) => return Err(Cow::Borrowed("logic can not be used as text")),
                 ReturnType::Scope(scope) => {
@@ -304,7 +302,6 @@ impl<'a> Template<'a> {
                 }
             }
         }
-        self.tokens.push(Token::EndText);
 
         Ok(())
     }
