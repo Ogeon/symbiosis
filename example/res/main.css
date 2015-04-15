@@ -1,24 +1,60 @@
+html, body {
+	margin: 0;
+	width: 100%;
+	height: 100%;
+	overflow: auto;
+}
+
 #cards {
 	columns: 2;
 }
 
-.card {
+.infotable {
 	display: table;
 	margin: 0;
-	margin-bottom: 2em;
-	width: 50%;
-	float: left;
 }
 
-.card > div {
+.infotable > div {
 	display: table-row;
 }
 
-.card > div > div {
+.infotable > div > div {
 	display: table-cell;
 	padding: 0.1em;
+	padding-left: 0.4em;
 }
 
-.card > div > div:first-child {
+.infotable > div > div:first-child {
 	width: 0;
+}
+
+.card {
+	width: 50%;
+	float: left;
+	margin-bottom: 2em;
+}
+
+.card:hover {
+	background: #aaa;
+	cursor: pointer;
+}
+
+#more_info_bg {
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 100%;
+	height: 100%;
+	background: rgba(255, 255, 255, 0.5)
+}
+
+#more_info {
+	max-width: 30em;
+	margin: auto;
+	height: 100%;
+	background: #fff;
+	overflow: auto;
+	border-width: 0 1px;
+	border-style: solid;
+	border-color: #aaa;
 }

@@ -3,12 +3,15 @@ extern crate symbiosis_rust;
 extern crate rand;
 extern crate rustc_serialize;
 
-use std::str::from_utf8;
+use std::str::{FromStr, from_utf8};
 use std::io::Read;
 use std::fs::File;
 use std::path::Path;
+use std::collections::BTreeMap;
+use std::sync::{Arc, RwLock};
+use std::cmp::max;
 
-use symbiosis_rust::Template;
+use symbiosis_rust::{Template, Collection};
 
 use rustful::{Server, TreeRouter, Context, Response, Handler};
 use rustful::Method::Get;
@@ -23,11 +26,18 @@ mod templates;
 mod names;
 
 fn main() {
+    //Our "database" of people
+    let people = Arc::new(RwLock::new(vec![]));
+
     let router = insert_routes! {
         TreeRouter::new() => {
-            "/" => Get: HandlerFn(display_page),
-            "/res/:resource" => Get: HandlerFn(get_resource),
-            "/api/more" => Get: HandlerFn(load_more)
+            "/" => Get: HandlerFn(people.clone(), display_page),
+            ":id" => Get: HandlerFn(people.clone(), display_page),
+            "res/:resource" => Get: HandlerFn(people.clone(), get_resource),
+            "api" => {
+                "more/:from" => Get: HandlerFn(people.clone(), load_more),
+                "person/:id" => Get: HandlerFn(people.clone(), load_person)
+            }
         }
     };
 
@@ -36,22 +46,38 @@ fn main() {
     }
 }
 
-struct HandlerFn(fn(Context, Response));
+struct HandlerFn(Arc<RwLock<Vec<Person>>>, for<'a> fn(&'a RwLock<Vec<Person>>, Context, Response));
 
 impl Handler for HandlerFn {
     fn handle_request(&self, context: Context, response: Response) {
-        self.0(context, response);
+        self.1(&*self.0, context, response);
     }
 }
 
 ///Do the initial page rendering and send it to the client.
-fn display_page(context: Context, mut response: Response) {
+fn display_page(people: &RwLock<Vec<Person>>, context: Context, mut response: Response) {
     response.set_header(ContentType(content_type!("text", "html", ("charset", "utf-8"))));
+
+    //Get the id of the requested person, if any, and make sure there are enough generated people
+    let len = people.read().unwrap().len();
+    let id: Option<usize> = context.variables.get("id").and_then(|v| FromStr::from_str(v).ok());
+
+    let min_len = if let Some(id) = id {
+        max(id + 1, 10)
+    } else {
+        10
+    };
+    
+    if len < min_len {
+        gen_people(&mut people.write().unwrap(), min_len);
+    }
 
     //Use a `Vec<u8>` as a byte buffer for the person cards.
     let mut cards = vec![];
-    for person in gen_people() {
+    for person in people.read().unwrap().iter().take(10) {
+        let str_id = person.id.to_string();
         let card = templates::Card {
+            id: &str_id,
             name: &person.name,
             age: &person.age.to_string(),
             supervisor: person.supervisor.as_ref().map(|s| &**s)
@@ -63,11 +89,34 @@ fn display_page(context: Context, mut response: Response) {
     //This should always work as long as the templates are correct.
     match from_utf8(&cards) {
         Ok(cards) => {
-            let document = templates::Document {
-                cards: cards
-            };
             let mut writer = response.into_writer();
-            document.render_to(&mut writer).ok();
+            match id {
+                Some(id) => {
+                    //Display info about someone
+
+                    let person = &people.read().unwrap()[id];
+                    let more_info = templates::MoreInfo {
+                        name: &person.name,
+                        age: &person.age.to_string(),
+                        supervisor: person.supervisor.as_ref().map(|s| &**s),
+                        projects: &Collection::Map(&person.projects)
+                    };
+                    let document = templates::Document {
+                        cards: cards,
+                        more_info: Some(&more_info)
+                    };
+                    document.render_to(&mut writer).ok();
+                },
+                None => {
+                    //No additional info was requested
+
+                    let document = templates::Document {
+                        cards: cards,
+                        more_info: None
+                    };
+                    document.render_to(&mut writer).ok();
+                }
+            }
         },
         Err(e) => {
             //Something went horribly wrong!
@@ -78,7 +127,7 @@ fn display_page(context: Context, mut response: Response) {
 }
 
 ///Just some resource loading code.
-fn get_resource(context: Context, mut response: Response) {
+fn get_resource(_: &RwLock<Vec<Person>>, context: Context, mut response: Response) {
     let base = Path::new("res");
 
     let filename = match context.variables.get("resource") {
@@ -121,9 +170,22 @@ fn get_resource(context: Context, mut response: Response) {
 }
 
 ///Generate a bunch of people and send them as JSON.
-fn load_more(context: Context, mut response: Response) {
+fn load_more(people: &RwLock<Vec<Person>>, context: Context, mut response: Response) {
     response.set_header(ContentType(content_type!("application", "json", ("charset", "utf-8"))));
-    match json::encode(&gen_people()) {
+
+    //Get the id from where the sequence of people starts and make sure we have generated enough
+    let len = people.read().unwrap().len();
+    let from = context.variables.get("from").and_then(|v| FromStr::from_str(v).ok()).unwrap_or(len);
+    
+    if len < from + 10 {
+        gen_people(&mut people.write().unwrap(), from + 10);
+    }
+
+    //Read the people and make a vector of references to them. json::encode likes only sized types
+    let people = people.read().unwrap();
+    let people_refs: Vec<_> = people[from..from+10].iter().collect();
+    
+    match json::encode(&people_refs) {
         Ok(json) => {response.into_writer().send(json).ok();},
         Err(e) => {
             context.log.error(&format!("failed to encode people list as json: {}", e));
@@ -132,40 +194,68 @@ fn load_more(context: Context, mut response: Response) {
     }
 }
 
-#[derive(RustcEncodable)]
-struct Person {
-    name: String,
-    age: u8,
-    supervisor: Option<String>
+///Generate a bunch of people and send them as JSON.
+fn load_person(people: &RwLock<Vec<Person>>, context: Context, mut response: Response) {
+    response.set_header(ContentType(content_type!("application", "json", ("charset", "utf-8"))));
+
+    let len = people.read().unwrap().len();
+    let id = context.variables.get("id").and_then(|v| FromStr::from_str(v).ok()).unwrap_or(0);
+    
+    if len <= id {
+        gen_people(&mut people.write().unwrap(), id + 1);
+    }
+    
+    match json::encode(&people.read().unwrap()[id]) {
+        Ok(json) => {response.into_writer().send(json).ok();},
+        Err(e) => {
+            context.log.error(&format!("failed to encode people list as json: {}", e));
+            response.set_status(InternalServerError);
+        }
+    }
 }
 
-///Generate a bunch of people.
-fn gen_people() -> Vec<Person> {
+
+
+#[derive(RustcEncodable)]
+struct Person {
+    id: usize,
+    name: String,
+    age: u8,
+    supervisor: Option<String>,
+    projects: BTreeMap<String, &'static str>
+}
+
+///Generate a bunch of people up to (not including) person `n`.
+fn gen_people(people: &mut Vec<Person>, n: usize)  {
     let mut rng = rand::thread_rng();
-    (0..10).map(|_| {
+    let len = people.len();
+    let positions = ["manager", "researcher", "developer"];
+    people.extend((len..n).map(|id| {
         let age = rng.gen_range(18, 64);
         Person {
-            name: names::gen(&mut rng),
+            id: id,
+            name: names::gen_person(&mut rng),
             age: age,
             supervisor: if age < 25 {
                 if 0.7f32 > rng.gen() {
-                    Some(names::gen(&mut rng))
+                    Some(names::gen_person(&mut rng))
                 } else {
                     None
                 }
             } else if age < 35 {
                 if 0.3f32 > rng.gen() {
-                    Some(names::gen(&mut rng))
+                    Some(names::gen_person(&mut rng))
                 } else {
                     None
                 }
             } else {
                 if 0.1f32 > rng.gen() {
-                    Some(names::gen(&mut rng))
+                    Some(names::gen_person(&mut rng))
                 } else {
                     None
                 }
-            }
+            },
+            projects: (17..rng.gen_range(18, age + 1)).map(|_| (names::gen_project(&mut rng), *rng.choose(&positions).unwrap())).collect()
         }
-    }).collect()
+    }));
 }

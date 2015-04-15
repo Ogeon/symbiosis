@@ -1,0 +1,11 @@
+<div>
+	<h1>{{ name }}</h1>
+	<div class="infotable">
+		<div><div>Age:</div><div>{{ age }}</div></div>
+		<div><div>Supervisor:</div><div>{{ if(supervisor) }}{{ supervisor }}{{ end }}{{ if(not(supervisor)) }}None{{ end }}</div></div>
+	</div>
+	<h2>Projects:</h2>
+	<ul>
+		{{ foreach(project, position, projects) }}<li>{{ project }} ({{position}})</li>{{ end }}
+	</ul>
+</div>
