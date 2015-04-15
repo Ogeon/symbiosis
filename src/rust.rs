@@ -295,13 +295,17 @@ impl<'a> Codegen for Rust<'a> {
                                     }
 
                                     if optional {
-                                        try!(write!(w, ".iter().flat_map(|c| c.values())"));
+                                        try!(write!(w, ".iter().flat_map(|c| c"));
+                                    }
+
+                                    if opt_key.is_some() {
+                                        try!(write!(w, ".key_values()"));
                                     } else {
                                         try!(write!(w, ".values()"));
                                     }
 
-                                    if opt_key.is_some() {
-                                        try!(write!(w, ".enumerate() {{\n"));
+                                    if optional {
+                                        try!(write!(w, ") {{\n"));
                                     } else {
                                         try!(write!(w, " {{\n"));
                                     }
