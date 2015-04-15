@@ -64,6 +64,7 @@ impl<'a, I> Iterator for Values<'a, I> {
 }
 
 ///A generic iterator for collection keys and values.
+///List indices will start from `1`, for aesthetic reasons.
 pub enum KeyValues<'a, I: 'a> {
     List(Enumerate<slice::Iter<'a, I>>),
     Map(btree_map::Iter<'a, String, I>)
@@ -73,7 +74,7 @@ impl<'a, I> Iterator for KeyValues<'a, I> {
     type Item = (Key<'a>, &'a I);
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            &mut KeyValues::List(ref mut i) => i.next().map(|(k, v)| (Key::List(k), v)),
+            &mut KeyValues::List(ref mut i) => i.next().map(|(k, v)| (Key::List(k + 1), v)),
             &mut KeyValues::Map(ref mut i) => i.next().map(|(k, v)| (Key::Map(k), v))
         }
     }

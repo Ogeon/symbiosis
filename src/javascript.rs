@@ -283,7 +283,7 @@ impl<'a> Codegen for JavaScript<'a> {
                             line!(w, indent, "{} = \"\"", text_var);
                             *state = TextState::Cleared;
                         }
-                        
+
                         if let Some(text) = text.last_mut() {
                             if text.is_none() && !inherit_text {
                                 let text_var = format!("text_{}", var_counter);
@@ -317,6 +317,11 @@ impl<'a> Codegen for JavaScript<'a> {
                         line!(w, indent, "if({}.hasOwnProperty({})) {{", collection_name, key);
                         indent += 1;
                         line!(w, indent, "var {} = {}[{}];", value, collection_name, key);
+                        if opt_key.is_some() {
+                            line!(w, indent, "if(!isNaN({})) {{", key);
+                            line!(w, indent + 1, "{}++;", key);
+                            line!(w, indent, "}}");
+                        }
 
                         if let &Some(ref ty) = ty {
                             scopes.push(Some((element, value, ty, opt_key.as_ref().map(|k| (k, key)))));
