@@ -66,7 +66,7 @@ pub enum Logic {
     And(Vec<Logic>),
     ///a or b or ...
     Or(Vec<Logic>),
-    ///The logical inverse of an expression.
+    ///The logical complement of an expression.
     Not(Box<Logic>),
     ///A value from a template parameter.
     Value(String)
