@@ -1,13 +1,50 @@
-use std::io::Write;
+use std::io::{self, Write};
 use std::collections::HashMap;
 use std::default::Default;
-use std::borrow::{Cow, ToOwned};
+use std::borrow::ToOwned;
+use std::fmt;
 
 use string_cache::atom::Atom;
 
 use codegen::{Codegen, Logic, Token, Scope, ContentType, Content, write_indent};
 
-use Error;
+#[derive(Debug)]
+pub enum Error {
+    NotSupported(&'static str),
+    UnknownType(String),
+    UndefinedPlaceholder(String),
+    CannotBeText(String),
+    CannotBeAttribute(String),
+    UnexpectedType(String, ContentType),
+    TooFewEnd,
+    TooManyEnd,
+
+    Io(io::Error)
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            &Error::NotSupported(feature) => write!(f, "{} is not supported by JavaScript templates", feature),
+            &Error::UnknownType(ref placeholder) => write!(f, "the type of '{}' was not fully inferred", placeholder),
+            &Error::UndefinedPlaceholder(ref name) => write!(f, "the placeholder '{}' was not defined", name),
+            &Error::CannotBeText(ref name) => write!(f, "the placeholder '{}' cannot be rendered as text", name),
+            &Error::CannotBeAttribute(ref name) => write!(f, "the placeholder '{}' cannot be rendered in an attribute", name),
+            &Error::UnexpectedType(ref name, ref ty) => write!(f, "expected the placeholder '{}' to be of type '{}'", name, ty),
+            &Error::TooFewEnd => write!(f, "unbalanced scopes: too few {{{{ end }}}}"),
+            &Error::TooManyEnd => write!(f, "unbalanced scopes: too many {{{{ end }}}}"),
+
+            &Error::Io(ref e) => e.fmt(f),
+            //&Error::Fmt(ref e) => e.fmt(f)
+        }
+    }
+}
+
+impl From<io::Error> for Error {
+    fn from(error: io::Error) -> Error {
+        Error::Io(error)
+    }
+}
 
 ///Represents the state of a JavaScript variable.
 pub enum VarState {
@@ -87,6 +124,8 @@ impl<'a> Default for JavaScript<'a> {
 }
 
 impl<'a> Codegen for JavaScript<'a> {
+    type Error = Error;
+
     fn build_template<W: Write>(&self, w: &mut W, name: &str, mut indent: u8, params: &HashMap<String, ContentType>, tokens: &[Token]) -> Result<(), Error> {
         if let Some(namespace) = self.namespace {
             line!(w, indent, "{}.{} = function() {{", namespace, name);
@@ -126,7 +165,7 @@ impl<'a> Codegen for JavaScript<'a> {
 
         for token in tokens {
             match token {
-                &Token::SetDoctype(_) => return Err(Error::Parse(vec![Cow::Borrowed("doctype declarations are currently not supported")])),
+                &Token::SetDoctype(_) => return Err(Error::NotSupported("doctype declarations")),
                 t @ &Token::BeginTag(_) | t @ &Token::EndTag(_) | t @ &Token::CloseTag(_) => {
                     if let Some(ref mut tree) = tree_stack.last_mut() {
                         tree.inherit_text = false;
@@ -177,7 +216,7 @@ impl<'a> Codegen for JavaScript<'a> {
 
         if let Some(tree) = tree_stack.pop() {
             if tree_stack.len() > 0 {
-                return Err(Error::Parse(vec![Cow::Borrowed("too few {{ end }}")]));
+                return Err(Error::TooFewEnd);
             }
 
             let mut tags = vec!["root".to_owned()];
@@ -194,7 +233,7 @@ impl<'a> Codegen for JavaScript<'a> {
                 }
 
                 match token {
-                    &Token::SetDoctype(_) => return Err(Error::Parse(vec![Cow::Borrowed("doctype declarations are currently not supported")])),
+                    &Token::SetDoctype(_) => return Err(Error::NotSupported("doctype declarations")),
                     &Token::BeginTag(ref name) => {
                         if let (Some(&mut Some((ref text_var, ref mut state))), Some(tag)) = (text.last_mut(), tags.last()) {
                             try!(append_text(w, indent, text_var, state, tag));
@@ -304,9 +343,8 @@ impl<'a> Codegen for JavaScript<'a> {
                         let (collection_name, ty) = match find_param(collection, params, &scopes) {
                             Some((Some(ref name), Some(&ContentType::Collection(ref ty, _)))) => ((*name).to_owned(), ty),
                             Some((None, Some(&ContentType::Collection(ref ty, _)))) => (format!("this.{}", collection), ty),
-                            Some((_, Some(ty))) => return Err(Error::Parse(vec![Cow::Owned(format!("expected {} to be a collection, but found {}", collection, ty))])),
-                            Some((_, None)) => return Err(Error::Parse(vec![Cow::Owned(format!("expected {} to be a collection, but found a collection key", collection))])),
-                            None => return Err(Error::Parse(vec![Cow::Owned(format!("{} was never defined", collection))]))
+                            Some((_, _)) => return Err(Error::UnexpectedType(collection.clone(), ContentType::Collection(None, false))),
+                            None => return Err(Error::UndefinedPlaceholder(collection.clone()))
                         };
 
                         var_counter += 1;
@@ -326,7 +364,7 @@ impl<'a> Codegen for JavaScript<'a> {
                         if let &Some(ref ty) = ty {
                             scopes.push(Some((element, value, ty, opt_key.as_ref().map(|k| (k, key)))));
                         } else {
-                            return Err(Error::Parse(vec![Cow::Owned(format!("content type of {} could not be inferred (is it used anywhere?)", collection))]));
+                            return Err(Error::UnknownType(collection.clone()));
                         }
                     },
                     &Token::End => {
@@ -345,7 +383,7 @@ impl<'a> Codegen for JavaScript<'a> {
                 Ok(())
             }));
         } else {
-            return Err(Error::Parse(vec![Cow::Borrowed("too many {{ end }}")]));
+            return Err(Error::TooManyEnd);
         }
 
         indent -= 1;
@@ -478,13 +516,10 @@ fn write_attribute<'a, W: Write>(
                     }
                     line!(w, indent, "}}");
                 },
-                Some((_, Some(&ContentType::Template(_)))) => {
-                    return Err(Error::Parse(vec![Cow::Borrowed("templates are not supported in attributes")]));
+                Some((_, Some(&ContentType::Template(_)))) | Some((_, Some(&ContentType::Collection(_, _)))) => {
+                    return Err(Error::CannotBeAttribute(placeholder.clone()));
                 },
-                Some((_, Some(&ContentType::Collection(_, _)))) => {
-                    return Err(Error::Parse(vec![Cow::Borrowed("collections cannot be used as text")]));
-                },
-                None => return Err(Error::Parse(vec![Cow::Owned(format!("{} was never defined", placeholder))]))
+                None => return Err(Error::UndefinedPlaceholder(placeholder.clone()))
             }
         }
     }
@@ -549,9 +584,9 @@ fn write_text<'a, W: Write>(
                     line!(w, indent, "}}");
                 },
                 Some((_, Some(&ContentType::Collection(_, _)))) => {
-                    return Err(Error::Parse(vec![Cow::Borrowed("collections cannot be used as text")]));
+                    return Err(Error::CannotBeText(placeholder.clone()));
                 },
-                None => return Err(Error::Parse(vec![Cow::Owned(format!("{} was never defined", placeholder))]))
+                None => return Err(Error::UndefinedPlaceholder(placeholder.clone()))
             }
         }
     }

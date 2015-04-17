@@ -1,12 +1,47 @@
-use std::io::Write;
+use std::io::{self, Write};
 use std::fmt::Write as FmtWrite;
 use std::collections::HashMap;
 use std::default::Default;
-use std::borrow::Cow;
+use std::fmt;
 
 use codegen::{Codegen, Logic, Token, Scope, ContentType, Content, write_indent};
 
-use Error;
+#[derive(Debug)]
+pub enum Error {
+    UnknownType(String),
+    UndefinedPlaceholder(String),
+    CannotBeRendered(String),
+    UnexpectedType(String, ContentType),
+
+    Io(io::Error),
+    Fmt(fmt::Error)
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            &Error::UnknownType(ref placeholder) => write!(f, "the type of '{}' was not fully inferred", placeholder),
+            &Error::UndefinedPlaceholder(ref name) => write!(f, "the placeholder '{}' was not defined", name),
+            &Error::CannotBeRendered(ref name) => write!(f, "the placeholder '{}' cannot be rendered as text", name),
+            &Error::UnexpectedType(ref name, ref ty) => write!(f, "expected the placeholder '{}' to be of type '{}'", name, ty),
+
+            &Error::Io(ref e) => e.fmt(f),
+            &Error::Fmt(ref e) => e.fmt(f)
+        }
+    }
+}
+
+impl From<io::Error> for Error {
+    fn from(error: io::Error) -> Error {
+        Error::Io(error)
+    }
+}
+
+impl From<fmt::Error> for Error {
+    fn from(error: fmt::Error) -> Error {
+        Error::Fmt(error)
+    }
+}
 
 ///Visibility of modules and structures in Rust.
 pub enum Visibility {
@@ -89,6 +124,8 @@ impl<'a> Default for Rust<'a> {
 }
 
 impl<'a> Codegen for Rust<'a> {
+    type Error = Error;
+    
     fn build_template<W: Write>(&self, w: &mut W, name: &str, mut indent: u8, params: &HashMap<String, ContentType>, tokens: &[Token]) -> Result<(), Error> {
         let public = match (&self.visibility, &self.named_module) {
             (&Visibility::Public, _) => true,
@@ -117,7 +154,10 @@ impl<'a> Codegen for Rust<'a> {
         for (parameter, ty) in params {
             try!(write_indent(w, indent + 1));
             try!(write!(w, "pub {}: ", parameter));
-            try!(write_ty(w, ty));
+            match write_ty(w, ty) {
+                Err(Error::UnknownType(_)) => return Err(Error::UnknownType(parameter.clone())),
+                r => try!(r)
+            }
             try!(write!(w, ",\n"));
         }
         
@@ -205,9 +245,8 @@ impl<'a> Codegen for Rust<'a> {
                                 line!(w, indent + 1, "try!(template.render_to(writer));");
                                 line!(w, indent, "}}");
                             },
-                            Some((_, Some(&ContentType::Bool))) => return Err(Error::Parse(vec![Cow::Borrowed("boolean values cannot be rendered as text")])),
-                            Some((_, Some(&ContentType::Collection(_, _)))) => return Err(Error::Parse(vec![Cow::Borrowed("collections cannot be rendered as text")])),
-                            None => return Err(Error::Parse(vec![Cow::Owned(format!("{} was never defined", placeholder))]))
+                            Some((_, Some(_ty))) => return Err(Error::CannotBeRendered(placeholder.clone())),
+                            None => return Err(Error::UndefinedPlaceholder(placeholder.clone()))
                         }
                     }
                 },
@@ -256,9 +295,8 @@ impl<'a> Codegen for Rust<'a> {
                                 line!(w, indent + 1, "try!(template.render_to(writer));");
                                 line!(w, indent, "}}");
                             },
-                            Some((_, Some(&ContentType::Bool))) => return Err(Error::Parse(vec![Cow::Borrowed("boolean values cannot be rendered as text")])),
-                            Some((_, Some(&ContentType::Collection(_, _)))) => return Err(Error::Parse(vec![Cow::Borrowed("collections cannot be rendered as text")])),
-                            None => return Err(Error::Parse(vec![Cow::Owned(format!("{} was never defined", placeholder))]))
+                            Some((_, Some(_ty))) => return Err(Error::CannotBeRendered(placeholder.clone())),
+                            None => return Err(Error::UndefinedPlaceholder(placeholder.clone()))
                         }
                     }
                 },
@@ -313,14 +351,14 @@ impl<'a> Codegen for Rust<'a> {
                                     if let &Some(ref ty) = ty {
                                         scopes.push(Some((element, ty, opt_key.as_ref())));
                                     } else {
-                                        return Err(Error::Parse(vec![Cow::Owned(format!("content type of {} could not be inferred (is it used anywhere?)", collection))]))
+                                        return Err(Error::UnknownType(collection.clone()))
                                     }
                                 },
-                                Some(ty) => return Err(Error::Parse(vec![Cow::Owned(format!("expected {} to be a collection, but found {}", collection, ty))])),
-                                None => return Err(Error::Parse(vec![Cow::Owned(format!("expected {} to be a collection, but found a collection key", collection))]))
+                                Some(_ty) => return Err(Error::UnexpectedType(collection.clone(), ContentType::Collection(None, false))),
+                                None => return Err(Error::UnexpectedType(collection.clone(), ContentType::Collection(None, false)))
                             }
                         },
-                        None => return Err(Error::Parse(vec![Cow::Owned(format!("{} is not defined", collection))])),
+                        None => return Err(Error::UndefinedPlaceholder(collection.clone())),
                     }
 
                     indent += 1;
@@ -411,7 +449,7 @@ fn write_ty<W: Write>(w: &mut W, ty: &ContentType) -> Result<(), Error> {
             try!(write!(w, ">"));
         },
         &ContentType::Collection(None, _) => {
-            return Err(Error::Parse(vec![Cow::Borrowed("type of collection content could not be inferred (is it used anywhere?)")]))
+            return Err(Error::UnknownType("".into()))
         }
     }
 

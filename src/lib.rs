@@ -133,7 +133,7 @@ impl<'a> TemplateGroup<'a> {
     }
 
     ///Write template code.
-    pub fn emit_code<W: Write, C: Codegen>(&self, writer: &mut W, codegen: &C) -> Result<(), Error> {
+    pub fn emit_code<W: Write, C: Codegen>(&self, writer: &mut W, codegen: &C) -> Result<(), C::Error> {
         codegen.build_module(writer, |w, indent| {
             for template in &self.templates {
                 try!(codegen.build_template(w, &template.name, indent, &template.parameters, &template.tokens));
@@ -203,7 +203,7 @@ impl<'a> Template<'a> {
     }
 
     ///Write template code.
-    pub fn emit_code<W: Write, C: Codegen>(&self, template_name: &str, writer: &mut W, codegen: &C) -> Result<(), Error> {
+    pub fn emit_code<W: Write, C: Codegen>(&self, template_name: &str, writer: &mut W, codegen: &C) -> Result<(), C::Error> {
         codegen.build_template(writer, template_name, 0, &self.parameters, &self.tokens)
     }
 

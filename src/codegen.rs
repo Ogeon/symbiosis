@@ -1,12 +1,9 @@
-use std::io::Write;
+use std::io::{self, Write};
 use std::collections::HashMap;
-use std::borrow::Cow;
 use std::fmt;
 
 use string_cache::atom::Atom;
 use html5ever::tokenizer::Doctype;
-
-use Error;
 
 ///Write an indented line of code.
 ///
@@ -24,13 +21,14 @@ macro_rules! line {
 ///Code generators are used to generate template code in different languages
 ///and they have to implement this trait.
 pub trait Codegen {
+    type Error;
     ///Generate code for a single template.
-    fn build_template<W: Write>(&self, w: &mut W, name: &str, indent: u8, params: &HashMap<String, ContentType>, tokens: &[Token]) -> Result<(), Error>;
+    fn build_template<W: Write>(&self, w: &mut W, name: &str, indent: u8, params: &HashMap<String, ContentType>, tokens: &[Token]) -> Result<(), Self::Error>;
 
     ///Generate code for a module or a similar collection containing multiple templates.
-    fn build_module<W, F>(&self, w: &mut W, build_templates: F) -> Result<(), Error> where
+    fn build_module<W, F>(&self, w: &mut W, build_templates: F) -> Result<(), Self::Error> where
         W: Write,
-        F: FnOnce(&mut W, u8) -> Result<(), Error>
+        F: FnOnce(&mut W, u8) -> Result<(), Self::Error>
     {
         build_templates(w, 0)
     }
@@ -117,6 +115,7 @@ pub enum Content {
 }
 
 ///Types of template parameter content.
+#[derive(Debug)]
 pub enum ContentType {
     ///A plain (maybe optional) string.
     String(bool),
@@ -129,7 +128,7 @@ pub enum ContentType {
 }
 
 impl ContentType {
-    pub fn combine_with(&mut self, pref_ty: ContentType) -> Result<(), Cow<'static, str>> {
+    pub fn combine_with(&mut self, pref_ty: ContentType) -> Result<(), String> {
         match (self, pref_ty) {
             (this, ContentType::Bool) => this.set_optional(true),
             (this @ &mut ContentType::Bool, mut other) => {
@@ -146,7 +145,7 @@ impl ContentType {
                     (&mut Some(_), None) |(&mut None, None)  => {}
                 };
             },
-            (a, b) => return Err(Cow::Owned(format!("content cannot be used as both {} and {}", a, b)))
+            (a, b) => return Err(format!("content cannot be used as both {} and {}", a, b))
         }
 
         Ok(())
@@ -182,14 +181,14 @@ impl fmt::Display for ContentType {
             &ContentType::Bool => "boolean value".fmt(f),
             &ContentType::Template(_) => "template".fmt(f),
             &ContentType::Collection(Some(ref a), _) => write!(f, "collection of {}", a),
-            &ContentType::Collection(None, _) => "collection of unknown content type".fmt(f),
+            &ContentType::Collection(None, _) => "collection of something".fmt(f),
         }
     }
 }
 
 ///Write `4 * steps` spaces.
 #[inline]
-pub fn write_indent<W: Write>(writer: &mut W, steps: u8) -> Result<(), Error> {
+pub fn write_indent<W: Write>(writer: &mut W, steps: u8) -> Result<(), io::Error> {
     for _ in 0..steps {
         try!(write!(writer, "    "));
     }

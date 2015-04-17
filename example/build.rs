@@ -5,9 +5,9 @@ use std::fs::{File, create_dir_all};
 use std::io::Read;
 use std::default::Default;
 
-use symbiosis::{TemplateGroup, Error};
-use symbiosis::rust::Rust;
-use symbiosis::javascript::JavaScript;
+use symbiosis::TemplateGroup;
+use symbiosis::rust::{self, Rust};
+use symbiosis::javascript::{self, JavaScript};
 
 fn main() {
     let out_dir = std::env::var("OUT_DIR").unwrap();
@@ -30,7 +30,7 @@ fn main() {
 
     let rust = Rust { ..Default::default() };
 
-    if let Err(e) = File::create(js_dest.join("templates.js")).map_err(|e| Error::Io(e)).and_then(|mut file| templates.emit_code(&mut file, &js)) {
+    if let Err(e) = File::create(js_dest.join("templates.js")).map_err(|e| javascript::Error::Io(e)).and_then(|mut file| templates.emit_code(&mut file, &js)) {
         panic!("failed to create res/templates.js: {}", e);
     }
 
@@ -43,7 +43,7 @@ fn main() {
         panic!("failed to parse templates/Document.html: {}", e);
     }
 
-    if let Err(e) = File::create(rust_dest.join("templates.rs")).map_err(|e| Error::Io(e)).and_then(|mut file| templates.emit_code(&mut file, &rust)) {
+    if let Err(e) = File::create(rust_dest.join("templates.rs")).map_err(|e| rust::Error::Io(e)).and_then(|mut file| templates.emit_code(&mut file, &rust)) {
         panic!("failed to create symbiosis/templates.rs: {}", e);
     }
 }
