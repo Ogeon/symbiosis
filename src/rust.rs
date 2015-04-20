@@ -440,7 +440,7 @@ fn write_ty<W: Write>(w: &mut W, ty: &ContentType) -> Result<(), Error> {
     }
 
     match ty {
-        &ContentType::String(_) => try!(write!(w, "&'a str")),
+        &ContentType::String(_) => try!(write!(w, "&'a ::std::fmt::Display")),
         &ContentType::Bool => try!(write!(w, "bool")),
         &ContentType::Template(_) => try!(write!(w, "&'a ::symbiosis_rust::Template")),
         &ContentType::Collection(Some(ref inner), _) => {

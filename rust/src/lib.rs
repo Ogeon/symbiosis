@@ -2,76 +2,196 @@
 
 use std::io::{self, Write};
 use std::iter::{Iterator, IntoIterator, Enumerate};
-use std::slice;
 use std::fmt;
-use std::collections::btree_map::{self, BTreeMap};
+use std::collections::btree_map::BTreeMap;
 
 ///Common trait for Symbiosis templates.
 pub trait Template {
     fn render_to(&self, writer: &mut Write) -> io::Result<()>;
 }
 
-///A generic collection type.
-pub enum Collection<'a, T: 'a> {
-    List(&'a [T]),
-    Map(&'a BTreeMap<String, T>)
+///A sequence of templates for lazy conversion from collection item to template.
+pub struct Templates<'a, I: 'a + ?Sized, F> where
+    &'a I: IntoIterator
+{
+    content: &'a I,
+    as_template: F
 }
 
-impl<'a, T> From<&'a [T]> for Collection<'a, T> {
-    fn from(other: &'a [T]) -> Collection<'a, T> {
-        Collection::List(other)
+impl <'a, I: 'a + ?Sized, F, T> Templates<'a, I, F> where
+    &'a I: IntoIterator,
+    F: Fn(<&'a I as IntoIterator>::Item) -> T,
+    T: Template
+{
+    pub fn new(content: &'a I, as_template: F) -> Templates<'a, I, F> {
+        Templates {
+            content: content,
+            as_template: as_template
+        }
     }
 }
 
-impl<'a, T> From<&'a BTreeMap<String, T>> for Collection<'a, T> {
-    fn from(other: &'a BTreeMap<String, T>) -> Collection<'a, T> {
-        Collection::Map(other)
+
+impl<'a, I: 'a + ?Sized, F, T> Template for Templates<'a, I, F> where
+    &'a I: IntoIterator,
+    F: Fn(<&'a I as IntoIterator>::Item) -> T,
+    T: Template
+{
+    fn render_to(&self, writer: &mut Write) -> io::Result<()> {
+        for post in self.content {
+            try!((self.as_template)(post).render_to(writer))
+        }
+
+        Ok(())
     }
 }
 
-impl<'a, T> Collection<'a, T> {
+///A generic collection trait.
+pub trait Collection<'a, T: 'a> {
     ///Get an iterator for the values in the collection.
-    pub fn values<'i>(&'i self) -> Values<'i, T> {
-        match self {
-            &Collection::List(ref l) => Values::List(l.into_iter()),
-            &Collection::Map(ref m) => Values::Map(m.values())
-        }
-    }
-
+    fn values(&'a self) -> Box<Iterator<Item=T> + 'a>;
+    
     ///Get an iterator for the keys and values in the collection.
-    pub fn key_values<'i>(&'i self) -> KeyValues<'i, T> {
-        match self {
-            &Collection::List(ref l) => KeyValues::List(l.into_iter().enumerate()),
-            &Collection::Map(ref m) => KeyValues::Map(m.iter())
-        }
+    fn key_values(&'a self) -> KeyValues<'a, T> {
+        KeyValues::List(self.values().enumerate())
     }
 }
 
-///A generic iterator for collection values.
-pub enum Values<'a, I: 'a> {
-    List(slice::Iter<'a, I>),
-    Map(btree_map::Values<'a, String, I>)
+impl<'a, T: 'a, C> Collection<'a, T> for &'a C where
+    C: Collection<'a, T>
+{
+    fn values(&'a self) -> Box<Iterator<Item=T> + 'a> {
+        (*self).values()
+    }
+
+    fn key_values(&'a self) -> KeyValues<'a, T> {
+        (*self).key_values()
+    }
 }
 
-impl<'a, I> Iterator for Values<'a, I> {
-    type Item = &'a I;
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            &mut Values::List(ref mut i) => i.next(),
-            &mut Values::Map(ref mut i) => i.next()
-        }
+
+impl<'a, T: 'a> Collection<'a, &'a T> for Vec<T> {
+    fn values(&'a self) -> Box<Iterator<Item=&'a T> + 'a> {
+        Box::new(self.iter())
+    }
+}
+
+impl<'a, T: 'a> Collection<'a, &'a Template> for Vec<T> where
+    T: Template
+{
+    fn values(&'a self) -> Box<Iterator<Item=&'a Template> + 'a> {
+        Box::new(self.iter().map(|i| i as &Template))
+    }
+}
+
+impl<'a, T: 'a> Collection<'a, &'a fmt::Display> for Vec<T> where
+    T: fmt::Display
+{
+    fn values(&'a self) -> Box<Iterator<Item=&'a fmt::Display> + 'a> {
+        Box::new(self.iter().map(|i| i as &fmt::Display))
+    }
+}
+
+impl<'a, T: 'a, C> Collection<'a, &'a Collection<'a, T>> for Vec<C> where
+    C: Collection<'a, T>
+{
+    fn values(&'a self) -> Box<Iterator<Item=&'a Collection<'a, T>> + 'a> {
+        Box::new(self.iter().map(|i| i as &Collection<'a, T>))
+    }
+}
+
+
+impl<'a, T: 'a> Collection<'a, &'a T> for &'a [T] {
+    fn values(&'a self) -> Box<Iterator<Item=&'a T> + 'a> {
+        Box::new(self.into_iter())
+    }
+}
+
+impl<'a, T: 'a> Collection<'a, &'a Template> for &'a [T] where
+    T: Template
+{
+    fn values(&'a self) -> Box<Iterator<Item=&'a Template> + 'a> {
+        Box::new(self.into_iter().map(|i| i as &Template))
+    }
+}
+
+impl<'a, T: 'a> Collection<'a, &'a fmt::Display> for &'a [T] where
+    T: fmt::Display
+{
+    fn values(&'a self) -> Box<Iterator<Item=&'a fmt::Display> + 'a> {
+        Box::new(self.into_iter().map(|i| i as &fmt::Display))
+    }
+}
+
+impl<'a, T: 'a, C> Collection<'a, &'a Collection<'a, T>> for &'a [C]  where
+    C: Collection<'a, T>
+{
+    fn values(&'a self) -> Box<Iterator<Item=&'a Collection<'a, T>> + 'a> {
+        Box::new(self.into_iter().map(|i| i as &Collection<'a, T>))
+    }
+}
+
+
+impl<'a, K, T: 'a> Collection<'a, &'a T> for BTreeMap<K, T> where
+    K: fmt::Display
+{
+    fn values(&'a self) -> Box<Iterator<Item=&'a T> + 'a> {
+        Box::new(self.values())
+    }
+
+    fn key_values(&'a self) -> KeyValues<'a, &'a T> {
+        KeyValues::Map(Box::new(self.iter().map(|(k, i)| (k as &fmt::Display, i))))
+    }
+}
+
+impl<'a, K, T: 'a> Collection<'a, &'a Template> for BTreeMap<K, T> where
+    K: fmt::Display,
+    T: Template
+{
+    fn values(&'a self) -> Box<Iterator<Item=&'a Template> + 'a> {
+        Box::new(self.values().map(|i| i as &Template))
+    }
+
+    fn key_values(&'a self) -> KeyValues<'a, &'a Template> {
+        KeyValues::Map(Box::new(self.iter().map(|(k, i)| (k as &fmt::Display, i as &Template))))
+    }
+}
+
+impl<'a, K, T: 'a> Collection<'a, &'a fmt::Display> for BTreeMap<K, T> where
+    K: fmt::Display,
+    T: fmt::Display
+{
+    fn values(&'a self) -> Box<Iterator<Item=&'a fmt::Display> + 'a> {
+        Box::new(self.values().map(|i| i as &fmt::Display))
+    }
+
+    fn key_values(&'a self) -> KeyValues<'a, &'a fmt::Display> {
+        KeyValues::Map(Box::new(self.iter().map(|(k, i)| (k as &fmt::Display, i as &fmt::Display))))
+    }
+}
+
+impl<'a, K, T: 'a, C> Collection<'a, &'a Collection<'a, T>> for BTreeMap<K, C> where
+    K: fmt::Display,
+    C: Collection<'a, T>
+{
+    fn values(&'a self) -> Box<Iterator<Item=&'a Collection<'a, T>> + 'a> {
+        Box::new(self.values().map(|i| i as &Collection<'a, T>))
+    }
+
+    fn key_values(&'a self) -> KeyValues<'a, &'a Collection<'a, T>> {
+        KeyValues::Map(Box::new(self.iter().map(|(k, i)| (k as &fmt::Display, i as &Collection<'a, T>))))
     }
 }
 
 ///A generic iterator for collection keys and values.
 ///List indices will start from `1`, for aesthetic reasons.
 pub enum KeyValues<'a, I: 'a> {
-    List(Enumerate<slice::Iter<'a, I>>),
-    Map(btree_map::Iter<'a, String, I>)
+    List(Enumerate<Box<Iterator<Item=I> + 'a>>),
+    Map(Box<Iterator<Item=(&'a fmt::Display, I)> + 'a>)
 }
 
 impl<'a, I> Iterator for KeyValues<'a, I> {
-    type Item = (Key<'a>, &'a I);
+    type Item = (Key<'a>, I);
     fn next(&mut self) -> Option<Self::Item> {
         match self {
             &mut KeyValues::List(ref mut i) => i.next().map(|(k, v)| (Key::List(k + 1), v)),
@@ -83,7 +203,7 @@ impl<'a, I> Iterator for KeyValues<'a, I> {
 ///A generic collection key.
 pub enum Key<'a> {
     List(usize),
-    Map(&'a String)
+    Map(&'a fmt::Display)
 }
 
 impl<'a> fmt::Display for Key<'a> {

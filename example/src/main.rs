@@ -3,15 +3,16 @@ extern crate symbiosis_rust;
 extern crate rand;
 extern crate rustc_serialize;
 
-use std::str::{FromStr, from_utf8};
+use std::str::FromStr;
 use std::io::Read;
 use std::fs::File;
 use std::path::Path;
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 use std::cmp::max;
+use std::fmt::Display;
 
-use symbiosis_rust::{Template, Collection};
+use symbiosis_rust::{Template, Templates};
 
 use rustful::{Server, TreeRouter, Context, Response, Handler};
 use rustful::Method::Get;
@@ -72,56 +73,42 @@ fn display_page(people: &RwLock<Vec<Person>>, context: Context, mut response: Re
         gen_people(&mut people.write().unwrap(), min_len);
     }
 
-    //Use a `Vec<u8>` as a byte buffer for the person cards.
-    let mut cards = vec![];
-    for person in people.read().unwrap().iter().take(10) {
-        let str_id = person.id.to_string();
-        let card = templates::Card {
-            id: &str_id,
+    let people = people.read().unwrap();
+    let cards = Templates::new(&people[..10], |person| {
+        templates::Card {
+            id: &person.id,
             name: &person.name,
-            age: &person.age.to_string(),
-            supervisor: person.supervisor.as_ref().map(|s| &**s)
-        };
-        card.render_to(&mut cards).ok();
-    }
+            age: &person.age,
+            supervisor: person.supervisor.as_ref().map(|s| s as &Display)
+        }
+    });
 
     //Use the buffer as a &str in the document template.
     //This should always work as long as the templates are correct.
-    match from_utf8(&cards) {
-        Ok(cards) => {
-            let mut writer = response.into_writer();
-            match id {
-                Some(id) => {
-                    //Display info about someone
-
-                    let person = &people.read().unwrap()[id];
-                    let more_info = templates::MoreInfo {
-                        name: &person.name,
-                        age: &person.age.to_string(),
-                        supervisor: person.supervisor.as_ref().map(|s| &**s),
-                        projects: &Collection::Map(&person.projects)
-                    };
-                    let document = templates::Document {
-                        cards: cards,
-                        more_info: Some(&more_info)
-                    };
-                    document.render_to(&mut writer).ok();
-                },
-                None => {
-                    //No additional info was requested
-
-                    let document = templates::Document {
-                        cards: cards,
-                        more_info: None
-                    };
-                    document.render_to(&mut writer).ok();
-                }
-            }
+    let mut writer = response.into_writer();
+    match id {
+        Some(id) => {
+            //Display info about someone
+            let person = &people[id];
+            let more_info = templates::MoreInfo {
+                name: &person.name,
+                age: &person.age,
+                supervisor: person.supervisor.as_ref().map(|s| s as &Display),
+                projects: &person.projects
+            };
+            let document = templates::Document {
+                cards: &cards,
+                more_info: Some(&more_info)
+            };
+            document.render_to(&mut writer).ok();
         },
-        Err(e) => {
-            //Something went horribly wrong!
-            context.log.error(&format!("Card templates generated invalid string: {}", e));
-            response.set_status(InternalServerError);
+        None => {
+            //No additional info was requested
+            let document = templates::Document {
+                cards: &cards,
+                more_info: None
+            };
+            document.render_to(&mut writer).ok();
         }
     }
 }
