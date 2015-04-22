@@ -6,7 +6,7 @@ use std::fmt;
 
 use string_cache::atom::Atom;
 
-use codegen::{Codegen, Logic, Token, Scope, ContentType, Content, write_indent};
+use codegen::{Codegen, Writer, Line, Logic, Token, Scope, ContentType, Content};
 
 #[derive(Debug)]
 pub enum Error {
@@ -70,43 +70,43 @@ pub struct JavaScript<'a> {
 }
 
 impl<'a> JavaScript<'a> {
-    fn eval_logic<W: Write>(&self, w: &mut W, first: bool, cond: &Logic, params: &HashMap<String, ContentType>) -> Result<(), Error> {
+    fn eval_logic<W: Write>(&self, w: &mut Line<W>, first: bool, cond: &Logic, params: &HashMap<String, ContentType>) -> Result<(), Error> {
         match cond {
             &Logic::And(ref conds) => {
                 if !first {
-                    try!(write!(w, "("));
+                    try_w!(w, "(");
                 }
                 for (i, cond) in conds.iter().enumerate() {
                     if i > 0 {
-                        try!(write!(w, " && "));
+                        try_w!(w, " && ");
                     }
                     try!(self.eval_logic(w, false, cond, params));
                 }
                 if !first {
-                    try!(write!(w, ")"));
+                    try_w!(w, ")");
                 }
             },
             &Logic::Or(ref conds) => {
                 if !first {
-                    try!(write!(w, "("));
+                    try_w!(w, "(");
                 }
                 for (i, cond) in conds.iter().enumerate() {
                     if i > 0 {
-                        try!(write!(w, " || "));
+                        try_w!(w, " || ");
                     }
                     try!(self.eval_logic(w, false, cond, params));
                 }
                 if !first {
-                    try!(write!(w, ")"));
+                    try_w!(w, ")");
                 }
             },
             &Logic::Not(ref cond) => {
-                try!(write!(w, "!("));
+                try_w!(w, "!(");
                 try!(self.eval_logic(w, false, cond, params));
-                try!(write!(w, ")"));
+                try_w!(w, ")");
             },
             &Logic::Value(ref val) => {
-                try!(write!(w, "this.{}", val));
+                try_w!(w, "this.{}", val);
             }
         }
 
@@ -126,37 +126,42 @@ impl<'a> Default for JavaScript<'a> {
 impl<'a> Codegen for JavaScript<'a> {
     type Error = Error;
 
-    fn build_template<W: Write>(&self, w: &mut W, name: &str, mut indent: u8, params: &HashMap<String, ContentType>, tokens: &[Token]) -> Result<(), Error> {
+    fn init_writer<'w, W: Write>(&self, w: &'w mut W) -> Writer<'w, W> {
+        Writer::new(w, "    ")
+    }
+
+    fn build_template<W: Write>(&self, w: &mut Writer<W>, name: &str, params: &HashMap<String, ContentType>, tokens: &[Token]) -> Result<(), Error> {
         if let Some(namespace) = self.namespace {
-            line!(w, indent, "{}.{} = function() {{", namespace, name);
+            try_w!(w, "{}.{} = function() {{", namespace, name);
         } else {
             match self.variable_state {
-                VarState::New => line!(w, indent, "var {} = function() {{", name),
-                VarState::Inited | VarState::Uninited => line!(w, indent, "{} = function() {{", name),
+                VarState::New => try_w!(w, "var {} = function() {{", name),
+                VarState::Inited | VarState::Uninited => try_w!(w, "{} = function() {{", name),
             }
         }
 
-        for (parameter, ty) in params {
-            match ty {
-                &ContentType::String(false) => line!(w, indent + 1, "this.{} = \"\";", parameter),
-                &ContentType::String(true) => line!(w, indent + 1, "this.{} = null;", parameter),
-                &ContentType::Bool => line!(w, indent + 1, "this.{} = false;", parameter),
-                &ContentType::Template(_) => line!(w, indent + 1, "this.{} = null;", parameter),
-                &ContentType::Collection(_, false) => line!(w, indent + 1, "this.{} = [];", parameter),
-                &ContentType::Collection(_, true) => line!(w, indent + 1, "this.{} = null;", parameter)
+        {
+            let mut block = w.block();
+            for (parameter, ty) in params {
+                match ty {
+                    &ContentType::String(false) => try_w!(block, "this.{} = \"\";", parameter),
+                    &ContentType::String(true) => try_w!(block, "this.{} = null;", parameter),
+                    &ContentType::Bool => try_w!(block, "this.{} = false;", parameter),
+                    &ContentType::Template(_) => try_w!(block, "this.{} = null;", parameter),
+                    &ContentType::Collection(_, false) => try_w!(block, "this.{} = [];", parameter),
+                    &ContentType::Collection(_, true) => try_w!(block, "this.{} = null;", parameter)
+                }
             }
         }
 
-        line!(w, indent, "}};");
+        try_w!(w, "}};");
 
 
         if let Some(namespace) = self.namespace {
-            line!(w, indent, "{}.{}.prototype.render_to = function(root) {{", namespace, name);
+            try_w!(w, "{}.{}.prototype.render_to = function(root) {{", namespace, name);
         } else {
-            line!(w, indent, "{}.prototype.render_to = function(root) {{", name);
+            try_w!(w, "{}.prototype.render_to = function(root) {{", name);
         }
-
-        indent += 1;
 
         let mut tree_stack = vec![TokenTree {
             inherit_text: false,
@@ -215,6 +220,8 @@ impl<'a> Codegen for JavaScript<'a> {
         }
 
         if let Some(tree) = tree_stack.pop() {
+            let mut func = w.block();
+
             if tree_stack.len() > 0 {
                 return Err(Error::TooFewEnd);
             }
@@ -228,7 +235,7 @@ impl<'a> Codegen for JavaScript<'a> {
             try!(tree.traverse(&mut |token, inherit_text, force_append| {
                 if force_append {
                     if let (Some(&mut Some((ref text_var, ref mut state))), Some(tag)) = (text.last_mut(), tags.last()) {
-                        try!(append_text(w, indent, text_var, state, tag));
+                        try!(append_text(&mut func, text_var, state, tag));
                     }
                 }
 
@@ -236,39 +243,39 @@ impl<'a> Codegen for JavaScript<'a> {
                     &Token::SetDoctype(_) => return Err(Error::NotSupported("doctype declarations")),
                     &Token::BeginTag(ref name) => {
                         if let (Some(&mut Some((ref text_var, ref mut state))), Some(tag)) = (text.last_mut(), tags.last()) {
-                            try!(append_text(w, indent, text_var, state, tag));
+                            try!(append_text(&mut func, text_var, state, tag));
                         }
 
                         let var = format!("tag_{}_{}", to_valid_ident(name.as_slice()), var_counter);
                         var_counter += 1;
-                        line!(w, indent, "var {} = document.createElement(\"{}\");", var, name.as_slice());
+                        try_w!(func, "var {} = document.createElement(\"{}\");", var, name.as_slice());
                         tags.push(var);
                     },
                     &Token::EndTag(self_closing) => if self_closing {
                         if let (Some(child), Some(parent)) = (tags.pop(), tags.last()) {
-                            line!(w, indent, "{}.appendChild({});", parent, child)
+                            try_w!(func, "{}.appendChild({});", parent, child)
                         }
                     },
                     &Token::CloseTag(_) => {
                         if let (Some(&mut Some((ref text_var, ref mut state))), Some(tag)) = (text.last_mut(), tags.last()) {
-                            try!(append_text(w, indent, text_var, state, tag));
+                            try!(append_text(&mut func, text_var, state, tag));
                         }
 
                         if let (Some(child), Some(parent)) = (tags.pop(), tags.last()) {
-                            line!(w, indent, "{}.appendChild({});", parent, child)
+                            try_w!(func, "{}.appendChild({});", parent, child)
                         }
                     },
                     &Token::BeginAttribute(ref name, ref content) => {
                         attribute_var = (name.clone(), format!("attr_{}_{}", to_valid_ident(name.as_slice()), var_counter));
                         var_counter += 1;
-                        try!(write_attribute(w, indent, &attribute_var.1, content, true, params, &scopes));
+                        try!(write_attribute(&mut func, &attribute_var.1, content, true, params, &scopes));
                     },
                     &Token::AppendToAttribute(ref content) => {
-                        try!(write_attribute(w, indent, &attribute_var.1, content, false, params, &scopes));
+                        try!(write_attribute(&mut func, &attribute_var.1, content, false, params, &scopes));
                     },
                     &Token::EndAttribute => {
                         if let Some(tag) = tags.last() {
-                            line!(w, indent, "{}.setAttribute(\"{}\", {});", tag, attribute_var.0.as_slice(), attribute_var.1);
+                            try_w!(func, "{}.setAttribute(\"{}\", {});", tag, attribute_var.0.as_slice(), attribute_var.1);
                         }
                     },
                     &Token::Text(ref content) => {
@@ -276,7 +283,7 @@ impl<'a> Codegen for JavaScript<'a> {
                             if text.is_none() && !inherit_text {
                                 let text_var = format!("text_{}", var_counter);
                                 var_counter += 1;
-                                line!(w, indent, "var {} = \"\";", text_var);
+                                try_w!(func, "var {} = \"\";", text_var);
                                 *text = Some((text_var, TextState::Cleared));
                             }
                         }
@@ -285,9 +292,9 @@ impl<'a> Codegen for JavaScript<'a> {
                             if let (&mut Some((ref text_var, ref mut state)), Some(tag)) = (text, tags.last()) {
                                 if state.has_leftovers() {
                                     *state = TextState::HasContent;
-                                    line!(w, indent, "{} = \"\";", text_var);
+                                    try_w!(func, "{} = \"\";", text_var);
                                 }
-                                try!(write_text(w, indent, text_var, state, content, tag, params, &scopes));
+                                try!(write_text(&mut func, text_var, state, content, tag, params, &scopes));
                                 break;
                             }
                         }
@@ -297,11 +304,11 @@ impl<'a> Codegen for JavaScript<'a> {
                             if text.is_none() && !inherit_text {
                                 let text_var = format!("text_{}", var_counter);
                                 var_counter += 1;
-                                line!(w, indent, "var {} = \"\";", text_var);
+                                try_w!(func, "var {} = \"\";", text_var);
                                 *text = Some((text_var, TextState::Cleared));
                             } else if let &mut Some((ref text_var, ref mut state)) = text {
                                 if state.has_leftovers() {
-                                    line!(w, indent, "{} = \"\"", text_var);
+                                    try_w!(func, "{} = \"\"", text_var);
                                     *state = TextState::Cleared;
                                 }
                             }
@@ -309,17 +316,19 @@ impl<'a> Codegen for JavaScript<'a> {
 
                         text.push(None);
 
-                        try!(write_indent(w, indent));
-                        try!(write!(w, "if("));
-                        try!(self.eval_logic(w, true, &cond.flattened(), params));
-                        try!(write!(w, ") {{\n"));
-                        indent += 1;
+                        {
+                            let mut line = func.begin_line();
+                            try_w!(line, "if(");
+                            try!(self.eval_logic(&mut line, true, &cond.flattened(), params));
+                            try_w!(line, ") {{");
+                        }
+                        func.indent();
                         scopes.push(None);
                     },
                     &Token::Scope(Scope::ForEach(ref collection, ref element, ref opt_key)) => {
                         if let (Some(&mut Some((ref text_var, ref mut state))), Some(tag)) = (text.last_mut(), tags.last()) {
-                            try!(append_text(w, indent, text_var, state, tag));
-                            line!(w, indent, "{} = \"\"", text_var);
+                            try!(append_text(&mut func, text_var, state, tag));
+                            try_w!(func, "{} = \"\"", text_var);
                             *state = TextState::Cleared;
                         }
 
@@ -327,7 +336,7 @@ impl<'a> Codegen for JavaScript<'a> {
                             if text.is_none() && !inherit_text {
                                 let text_var = format!("text_{}", var_counter);
                                 var_counter += 1;
-                                line!(w, indent, "var {} = \"\";", text_var);
+                                try_w!(func, "var {} = \"\";", text_var);
                                 *text = Some((text_var, TextState::Cleared));
                             }
                         }
@@ -349,16 +358,16 @@ impl<'a> Codegen for JavaScript<'a> {
 
                         var_counter += 1;
 
-                        line!(w, indent, "var {}", key);
-                        line!(w, indent, "for({} in {}) {{", key, collection_name);
-                        indent += 1;
-                        line!(w, indent, "if({}.hasOwnProperty({})) {{", collection_name, key);
-                        indent += 1;
-                        line!(w, indent, "var {} = {}[{}];", value, collection_name, key);
+                        try_w!(func, "var {}", key);
+                        try_w!(func, "for({} in {}) {{", key, collection_name);
+                        func.indent();
+                        try_w!(func, "if({}.hasOwnProperty({})) {{", collection_name, key);
+                        func.indent();
+                        try_w!(func, "var {} = {}[{}];", value, collection_name, key);
                         if opt_key.is_some() {
-                            line!(w, indent, "if(!isNaN({})) {{", key);
-                            line!(w, indent + 1, "{}++;", key);
-                            line!(w, indent, "}}");
+                            try_w!(func, "if(!isNaN({})) {{", key);
+                            try_w!(func.indented_line(), "{}++;", key);
+                            try_w!(func, "}}");
                         }
 
                         if let &Some(ref ty) = ty {
@@ -369,13 +378,13 @@ impl<'a> Codegen for JavaScript<'a> {
                     },
                     &Token::End => {
                         if let (Some(Some((ref text_var, ref mut state))), Some(tag)) = (text.pop(), tags.last()) {
-                            try!(append_text(w, indent, text_var, state, tag));
+                            try!(append_text(&mut func, text_var, state, tag));
                         }
-                        indent -= 1;
-                        line!(w, indent, "}}");
+                        func.unindent();
+                        try_w!(func, "}}");
                         if let Some(Some(_)) = scopes.pop() {
-                            indent -= 1;
-                            line!(w, indent, "}}");
+                            func.unindent();
+                            try_w!(func, "}}");
                         }
                     }
                 }
@@ -386,25 +395,23 @@ impl<'a> Codegen for JavaScript<'a> {
             return Err(Error::TooManyEnd);
         }
 
-        indent -= 1;
-
-        line!(w, indent, "}};");
+        try_w!(w, "}};");
         Ok(())
     }
 
-    fn build_module<W, F>(&self, w: &mut W, build_templates: F) -> Result<(), Error> where
+    fn build_module<W, F>(&self, w: &mut Writer<W>, build_templates: F) -> Result<(), Error> where
         W: Write,
-        F: FnOnce(&mut W, u8) -> Result<(), Error>
+        F: FnOnce(&mut Writer<W>) -> Result<(), Error>
     {
         if let Some(ref namespace) = self.namespace {
             match self.variable_state {
-                VarState::New => line!(w, 0, "var {} = {{}};", namespace),
-                VarState::Uninited => line!(w, 0, "{} = {{}};", namespace),
+                VarState::New => try_w!(w, "var {} = {{}};", namespace),
+                VarState::Uninited => try_w!(w, "{} = {{}};", namespace),
                 _ => {}
             }
         }
 
-        build_templates(w, 0)
+        build_templates(w)
     }
 }
 
@@ -472,9 +479,9 @@ fn find_param<'a, 'b>(param: &str, params: &'a HashMap<String, ContentType>, sco
     params.get(param).map(|t| (None, Some(t)))
 }
 
-fn append_text<W: Write>(w: &mut W, indent: u8, var: &str, state: &mut TextState, tag: &str) -> Result<(), Error> {
+fn append_text<W: Write>(w: &mut Writer<W>, var: &str, state: &mut TextState, tag: &str) -> Result<(), Error> {
     if state.has_content() {
-        line!(w, indent, "{}.appendChild(document.createTextNode({}));", tag, var);
+        try_w!(w, "{}.appendChild(document.createTextNode({}));", tag, var);
         *state = TextState::Leftovers;
     }
 
@@ -482,8 +489,7 @@ fn append_text<W: Write>(w: &mut W, indent: u8, var: &str, state: &mut TextState
 }
 
 fn write_attribute<'a, W: Write>(
-    w: &mut W,
-    indent: u8,
+    w: &mut Writer<W>,
     var: &str,
     content: &Content,
     new: bool,
@@ -493,28 +499,28 @@ fn write_attribute<'a, W: Write>(
     match content {
         &Content::String(ref content) => {
             if new {
-                line!(w, indent, "var {} = \"{}\";", var, content);
+                try_w!(w, "var {} = \"{}\";", var, content);
             } else if content.len() > 0 {
-                line!(w, indent, "{} += \"{}\";", var, content);
+                try_w!(w, "{} += \"{}\";", var, content);
             }
         },
         &Content::Placeholder(ref placeholder) => {
             match find_param(placeholder, params, &scopes) {
                 Some((alias, Some(&ContentType::String(_)))) | Some((alias, Some(&ContentType::Bool))) | Some((alias, None)) => {
                     if new {
-                        line!(w, indent, "var {} = \"\";", var);
+                        try_w!(w, "var {} = \"\";", var);
                     }
                     match alias {
                         Some(alias) => {
-                            line!(w, indent, "if({} !== null) {{", alias);
-                            line!(w, indent + 1, "{} += {};", var, alias);
+                            try_w!(w, "if({} !== null) {{", alias);
+                            try_w!(w.indented_line(), "{} += {};", var, alias);
                         },
                         None => {
-                            line!(w, indent, "if(this.{} !== null) {{", placeholder);
-                            line!(w, indent + 1, "{} += this.{};", var, placeholder);
+                            try_w!(w, "if(this.{} !== null) {{", placeholder);
+                            try_w!(w.indented_line(), "{} += this.{};", var, placeholder);
                         }
                     }
-                    line!(w, indent, "}}");
+                    try_w!(w, "}}");
                 },
                 Some((_, Some(&ContentType::Template(_)))) | Some((_, Some(&ContentType::Collection(_, _)))) => {
                     return Err(Error::CannotBeAttribute(placeholder.clone()));
@@ -528,8 +534,7 @@ fn write_attribute<'a, W: Write>(
 }
 
 fn write_text<'a, W: Write>(
-    w: &mut W,
-    indent: u8,
+    w: &mut Writer<W>,
     var: &str,
     state: &mut TextState,
     content: &Content,
@@ -539,7 +544,7 @@ fn write_text<'a, W: Write>(
 ) -> Result<(), Error> {
     match content {
         &Content::String(ref content) => if content.len() > 0 {
-            line!(w, indent, "{} += \"{}\";", var, content);
+            try_w!(w, "{} += \"{}\";", var, content);
             *state = TextState::HasContent;
         },
         &Content::Placeholder(ref placeholder) => {
@@ -547,41 +552,45 @@ fn write_text<'a, W: Write>(
                 Some((alias, Some(&ContentType::String(_)))) | Some((alias, Some(&ContentType::Bool))) | Some((alias, None)) => {
                     match alias {
                         Some(alias) => {
-                            line!(w, indent, "if({} !== null) {{", alias);
-                            line!(w, indent + 1, "{} += {};", var, alias);
+                            try_w!(w, "if({} !== null) {{", alias);
+                            try_w!(w.indented_line(), "{} += {};", var, alias);
                         },
                         None => {
-                            line!(w, indent, "if(this.{} !== null) {{", placeholder);
-                            line!(w, indent + 1, "{} += this.{};", var, placeholder);
+                            try_w!(w, "if(this.{} !== null) {{", placeholder);
+                            try_w!(w.indented_line(), "{} += this.{};", var, placeholder);
                         }
                     }
-                    line!(w, indent, "}}");
+                    try_w!(w, "}}");
                     *state = TextState::HasContent;
                 },
                 Some((alias, Some(&ContentType::Template(_)))) => {
-                    try!(append_text(w, indent, var, state, parent));
+                    try!(append_text(w, var, state, parent));
                     match alias {
                         Some(alias) => {
-                            line!(w, indent, "if({} !== null) {{", alias);
+                            try_w!(w, "if({} !== null) {{", alias);
                         },
                         None => {
-                            line!(w, indent, "if(this.{} !== null) {{", placeholder);
+                            try_w!(w, "if(this.{} !== null) {{", placeholder);
                         }
                     }
-                    match alias {
-                        Some(alias) => {
-                            line!(w, indent, "if({} !== null) {{", alias);
-                            try!(write_indent(w, indent));
-                            try!(write!(w, "{}", alias));
-                        },
-                        None => {
-                            line!(w, indent, "if(this.{} !== null) {{", placeholder);
-                            try!(write_indent(w, indent));
-                            try!(write!(w, "this.{}", placeholder));
-                        }
+                    {
+                        let mut line = match alias {
+                            Some(alias) => {
+                                try_w!(w, "if({} !== null) {{", alias);
+                                let mut line = w.begin_line();
+                                try_w!(line, "{}", alias);
+                                line
+                            },
+                            None => {
+                                try_w!(w, "if(this.{} !== null) {{", placeholder);
+                                let mut line = w.begin_line();
+                                try_w!(line, "this.{}", placeholder);
+                                line
+                            }
+                        };
+                        try_w!(line, ".render_to({});", parent);
                     }
-                    try!(write!(w, ".render_to({});", parent));
-                    line!(w, indent, "}}");
+                    try_w!(w, "}}");
                 },
                 Some((_, Some(&ContentType::Collection(_, _)))) => {
                     return Err(Error::CannotBeText(placeholder.clone()));

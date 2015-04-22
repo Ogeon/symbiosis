@@ -5,32 +5,29 @@ use std::fmt;
 use string_cache::atom::Atom;
 use html5ever::tokenizer::Doctype;
 
-///Write an indented line of code.
-///
-///Example: `line!(writer, indent_steps, "var {} = this.{};", var_name, field_name);`.
+///Shortcut for the commonly used `try!(write!(...))`.
 #[macro_export]
-macro_rules! line {
-    ($writer:ident, $indent:expr, $($format:tt)*) => (
-        {
-            try!($crate::codegen::write_indent($writer, $indent));
-            try!(writeln!($writer, $($format)*));
-        }
-    )
+macro_rules! try_w {
+    ($($args:tt)*) => (try!(write!($($args)*)))
 }
 
 ///Code generators are used to generate template code in different languages
 ///and they have to implement this trait.
 pub trait Codegen {
     type Error;
+
+    ///Initiate the code writer.
+    fn init_writer<'a, W: Write>(&self, w: &'a mut W) -> Writer<'a, W>;
+
     ///Generate code for a single template.
-    fn build_template<W: Write>(&self, w: &mut W, name: &str, indent: u8, params: &HashMap<String, ContentType>, tokens: &[Token]) -> Result<(), Self::Error>;
+    fn build_template<W: Write>(&self, w: &mut Writer<W>, name: &str, params: &HashMap<String, ContentType>, tokens: &[Token]) -> Result<(), Self::Error>;
 
     ///Generate code for a module or a similar collection containing multiple templates.
-    fn build_module<W, F>(&self, w: &mut W, build_templates: F) -> Result<(), Self::Error> where
+    fn build_module<W, F>(&self, w: &mut Writer<W>, build_templates: F) -> Result<(), Self::Error> where
         W: Write,
-        F: FnOnce(&mut W, u8) -> Result<(), Self::Error>
+        F: FnOnce(&mut Writer<W>) -> Result<(), Self::Error>
     {
-        build_templates(w, 0)
+        build_templates(w)
     }
 }
 
@@ -186,11 +183,102 @@ impl fmt::Display for ContentType {
     }
 }
 
-///Write `4 * steps` spaces.
-#[inline]
-pub fn write_indent<W: Write>(writer: &mut W, steps: u8) -> Result<(), io::Error> {
-    for _ in 0..steps {
-        try!(write!(writer, "    "));
+pub struct Writer<'a, W: Write + 'a> {
+    indent_str: &'static str,
+    base_indent: u8,
+    indent: u8,
+    writer: &'a mut W
+}
+
+impl<'a, W: Write> Writer<'a, W> {
+    pub fn new(writer: &'a mut W, indent: &'static str) -> Writer<'a, W> {
+        Writer {
+            indent_str: indent,
+            base_indent: 0,
+            indent: 0,
+            writer: writer
+        }
     }
-    Ok(())
+
+    pub fn begin_line<'w>(&'w mut self) -> Line<'w, W> {
+        Line {
+            writer: self.writer,
+            indent: self.indent,
+            indent_str: self.indent_str,
+            indent_written: false
+        }
+    }
+
+    pub fn write_fmt(&mut self, args: fmt::Arguments) -> io::Result<()> {
+        let mut line = self.begin_line();
+        try!(line.write_fmt(args));
+        line.end()
+    }
+
+    pub fn indent(&mut self) {
+        self.indent += 1;
+    }
+
+    pub fn unindent(&mut self) {
+        if self.indent > 0 {
+            self.indent -= 1;
+        }
+    }
+
+    pub fn indented_line<'w>(&'w mut self) -> Line<'w, W> {
+        Line {
+            writer: self.writer,
+            indent: self.indent + 1,
+            indent_str: self.indent_str,
+            indent_written: false
+        }
+    }
+
+    pub fn block<'w>(&'w mut self) -> Writer<'w, W> {
+        Writer {
+            indent_str: self.indent_str,
+            base_indent: self.base_indent + self.indent + 1,
+            indent: 0,
+            writer: self.writer
+        }
+    }
+}
+
+pub struct Line<'a, W: Write + 'a> {
+    writer: &'a mut W,
+    indent: u8,
+    indent_str: &'static str,
+    indent_written: bool
+}
+
+impl<'a, W: Write> Line<'a, W> {
+    pub fn write_fmt(&mut self, args: fmt::Arguments) -> io::Result<()> {
+        try!(self.write_indent());
+        self.writer.write_fmt(args)
+    }
+
+    pub fn end(mut self) -> io::Result<()> {
+        self.write_end()
+    }
+
+    #[inline]
+    fn write_indent(&mut self) -> io::Result<()> {
+        if self.indent_written {
+            for _ in 0..self.indent {
+                try!(self.writer.write_all(self.indent_str.as_bytes()))
+            }
+        }
+        Ok(())
+    }
+
+    fn write_end(&mut self) -> io::Result<()> {
+        self.writer.write_all(b"\n")
+    }
+}
+
+impl<'a, W: Write> Drop for Line<'a, W> {
+    #[allow(unused_must_use)]
+    fn drop(&mut self) {
+        self.write_end();
+    }
 }

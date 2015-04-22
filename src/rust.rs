@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::default::Default;
 use std::fmt;
 
-use codegen::{Codegen, Logic, Token, Scope, ContentType, Content, write_indent};
+use codegen::{Codegen, Writer, Line, Logic, Token, Scope, ContentType, Content};
 
 #[derive(Debug)]
 pub enum Error {
@@ -65,46 +65,46 @@ pub struct Rust<'a> {
 }
 
 impl<'a> Rust<'a> {
-    fn eval_logic<W: Write>(&self, w: &mut W, first: bool, cond: &Logic, params: &HashMap<String, ContentType>) -> Result<(), Error> {
+    fn eval_logic<W: Write>(&self, w: &mut Line<W>, first: bool, cond: &Logic, params: &HashMap<String, ContentType>) -> Result<(), Error> {
         match cond {
             &Logic::And(ref conds) => {
                 if !first {
-                    try!(write!(w, "("));
+                    try_w!(w, "(");
                 }
                 for (i, cond) in conds.iter().enumerate() {
                     if i > 0 {
-                        try!(write!(w, " && "));
+                        try_w!(w, " && ");
                     }
                     try!(self.eval_logic(w, false, cond, params));
                 }
                 if !first {
-                    try!(write!(w, ")"));
+                    try_w!(w, ")");
                 }
             },
             &Logic::Or(ref conds) => {
                 if !first {
-                    try!(write!(w, "("));
+                    try_w!(w, "(");
                 }
                 for (i, cond) in conds.iter().enumerate() {
                     if i > 0 {
-                        try!(write!(w, " || "));
+                        try_w!(w, " || ");
                     }
                     try!(self.eval_logic(w, false, cond, params));
                 }
                 if !first {
-                    try!(write!(w, ")"));
+                    try_w!(w, ")");
                 }
             },
             &Logic::Not(ref cond) => {
-                try!(write!(w, "!("));
+                try_w!(w, "!(");
                 try!(self.eval_logic(w, false, cond, params));
-                try!(write!(w, ")"));
+                try_w!(w, ")");
             },
             &Logic::Value(ref val) => {
                 match params.get(val) {
-                    Some(&ContentType::String(false)) | Some(&ContentType::Template(false)) | Some(&ContentType::Collection(_, false)) => try!(write!(w, "true")),
-                    Some(&ContentType::String(true)) | Some(&ContentType::Template(true)) | Some(&ContentType::Collection(_, true)) => try!(write!(w, "self.{}.is_some()", val)),
-                    Some(&ContentType::Bool) => try!(write!(w, "self.{}", val)),
+                    Some(&ContentType::String(false)) | Some(&ContentType::Template(false)) | Some(&ContentType::Collection(_, false)) => try_w!(w, "true"),
+                    Some(&ContentType::String(true)) | Some(&ContentType::Template(true)) | Some(&ContentType::Collection(_, true)) => try_w!(w, "self.{}.is_some()", val),
+                    Some(&ContentType::Bool) => try_w!(w, "self.{}", val),
                     None => {}
                 }
             }
@@ -125,8 +125,12 @@ impl<'a> Default for Rust<'a> {
 
 impl<'a> Codegen for Rust<'a> {
     type Error = Error;
+
+    fn init_writer<'w, W: Write>(&self, w: &'w mut W) -> Writer<'w, W> {
+        Writer::new(w, "    ")
+    }
     
-    fn build_template<W: Write>(&self, w: &mut W, name: &str, mut indent: u8, params: &HashMap<String, ContentType>, tokens: &[Token]) -> Result<(), Error> {
+    fn build_template<W: Write>(&self, w: &mut Writer<W>, name: &str, params: &HashMap<String, ContentType>, tokens: &[Token]) -> Result<(), Error> {
         let public = match (&self.visibility, &self.named_module) {
             (&Visibility::Public, _) => true,
             (_, &Some(_)) => true,
@@ -139,279 +143,284 @@ impl<'a> Codegen for Rust<'a> {
 
         if public {
             if params.len() > 0 {
-                line!(w, indent, "pub struct {}<'a> {{", name);
+                try_w!(w, "pub struct {}<'a> {{", name);
             } else {
-                line!(w, indent, "pub struct {};", name);
+                try_w!(w, "pub struct {};", name);
             }
         } else {
             if params.len() > 0 {
-                line!(w, indent, "struct {}<'a> {{", name);
+                try_w!(w, "struct {}<'a> {{", name);
             } else {
-                line!(w, indent, "struct {};", name);
+                try_w!(w, "struct {};", name);
             }
         }
 
-        for (parameter, ty) in params {
-            try!(write_indent(w, indent + 1));
-            try!(write!(w, "pub {}: ", parameter));
-            match write_ty(w, ty) {
-                Err(Error::UnknownType(_)) => return Err(Error::UnknownType(parameter.clone())),
-                r => try!(r)
-            }
-            try!(write!(w, ",\n"));
-        }
-        
-        if params.len() > 0 {
-            line!(w, indent, "}}");
-        }
-
-        if params.len() > 0 {
-            line!(w, indent, "impl<'a> ::symbiosis_rust::Template for {}<'a> {{", name);
-        } else {
-            line!(w, indent, "impl ::symbiosis_rust::Template for {} {{", name);
-        }
-        indent += 1;
-
-        line!(w, indent, "fn render_to(&self, writer: &mut ::std::io::Write) -> ::std::io::Result<()> {{");
-        indent += 1;
-
-        for token in tokens {
-            match token {
-                &Token::SetDoctype(ref doctype) => {
-                    string_buf.push_str("<!DOCTYPE");
-                    if let Some(ref name) = doctype.name {
-                        try!(write!(&mut string_buf, " {}", name));
-                    }
-
-                    if let Some(ref public_id) = doctype.public_id {
-                        try!(write!(&mut string_buf, " PUBLIC \\\"{}\\\"", public_id));
-                    } else if doctype.system_id.is_some() {
-                        string_buf.push_str(" SYSTEM");
-                    }
-
-                    if let Some(ref system_id) = doctype.system_id {
-                        try!(write!(&mut string_buf, " \\\"{}\\\"", system_id));
-                    }
-                    string_buf.push_str(">");
-                },
-                &Token::BeginTag(ref name) => try!(write!(&mut string_buf, "<{}", name.as_slice())),
-                &Token::EndTag(_self_close) => try!(write!(&mut string_buf, ">")),
-                &Token::CloseTag(ref name) => try!(write!(&mut string_buf, "</{}>", name.as_slice())),
-                &Token::BeginAttribute(ref name, ref content) => match content {
-                    &Content::String(ref content) => try!(write!(&mut string_buf, " {}=\\\"{}", name.as_slice(), content)),
-                    &Content::Placeholder(ref placeholder) => {
-                        match find_param(placeholder, params, &scopes) {
-                            Some((param_ty, Some(&ContentType::String(false)))) | Some((param_ty, None)) => {
-                                try!(write!(&mut string_buf, " {}=\\\"{{}}", name.as_slice()));
-                                if let ParamTy::Param = param_ty {
-                                    fmt_args.push(format!("self.{}", placeholder));
-                                } else {
-                                    fmt_args.push(placeholder.clone());
-                                }
-                            },
-                            Some((param_ty, Some(&ContentType::String(true)))) => {
-                                try!(write!(&mut string_buf, " {}=\\\"", name.as_slice()));
-                                try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
-
-                                if let ParamTy::Param = param_ty {
-                                    line!(w, indent, "if let Some(val) = self.{} {{", placeholder);
-                                } else {
-                                    line!(w, indent, "if let Some(val) = {} {{", placeholder);
-                                }
-
-                                line!(w, indent + 1, "try!(write!(writer, \"{{}}\", val));");
-                                line!(w, indent, "}}");
-                            },
-                            Some((param_ty, Some(&ContentType::Template(false)))) => {
-                                try!(write!(&mut string_buf, " {}=\\\"", name.as_slice()));
-                                try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
-
-                                if let ParamTy::Param = param_ty {
-                                    line!(w, indent, "try!(self.{}.render_to(writer));", placeholder);
-                                } else {
-                                    line!(w, indent, "try!({}.render_to(writer));", placeholder);
-                                }
-                            },
-                            Some((param_ty, Some(&ContentType::Template(true)))) => {
-                                try!(write!(&mut string_buf, " {}=\\\"", name.as_slice()));
-                                try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
-
-                                if let ParamTy::Param = param_ty {
-                                    line!(w, indent, "if let Some(template) = self.{} {{", placeholder);
-                                } else {
-                                    line!(w, indent, "if let Some(template) = {} {{", placeholder);
-                                }
-
-                                line!(w, indent + 1, "try!(template.render_to(writer));");
-                                line!(w, indent, "}}");
-                            },
-                            Some((_, Some(_ty))) => return Err(Error::CannotBeRendered(placeholder.clone())),
-                            None => return Err(Error::UndefinedPlaceholder(placeholder.clone()))
-                        }
-                    }
-                },
-                &Token::AppendToAttribute(ref text) | &Token::Text(ref text) => match text {
-                    &Content::String(ref content) => try!(write!(&mut string_buf, "{}", content)),
-                    &Content::Placeholder(ref placeholder) => {
-                        match find_param(placeholder, params, &scopes) {
-                            Some((param_ty, Some(&ContentType::String(false)))) | Some((param_ty, None)) => {
-                                try!(write!(&mut string_buf, "{{}}"));
-                                if let ParamTy::Param = param_ty {
-                                    fmt_args.push(format!("self.{}", placeholder));
-                                } else {
-                                    fmt_args.push(placeholder.clone());
-                                }
-                            },
-                            Some((param_ty, Some(&ContentType::String(true)))) => {
-                                try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
-
-                                if let ParamTy::Param = param_ty {
-                                    line!(w, indent, "if let Some(val) = self.{} {{", placeholder);
-                                } else {
-                                    line!(w, indent, "if let Some(val) = {} {{", placeholder);
-                                }
-
-                                line!(w, indent + 1, "try!(write!(writer, \"{{}}\", val));");
-                                line!(w, indent, "}}");
-                            },
-                            Some((param_ty, Some(&ContentType::Template(false)))) => {
-                                try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
-
-                                if let ParamTy::Param = param_ty {
-                                    line!(w, indent, "try!(self.{}.render_to(writer));", placeholder);
-                                } else {
-                                    line!(w, indent, "try!({}.render_to(writer));", placeholder);
-                                }
-                            },
-                            Some((param_ty, Some(&ContentType::Template(true)))) => {
-                                try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
-
-                                if let ParamTy::Param = param_ty {
-                                    line!(w, indent, "if let Some(template) = self.{} {{", placeholder);
-                                } else {
-                                    line!(w, indent, "if let Some(template) = {} {{", placeholder);
-                                }
-
-                                line!(w, indent + 1, "try!(template.render_to(writer));");
-                                line!(w, indent, "}}");
-                            },
-                            Some((_, Some(_ty))) => return Err(Error::CannotBeRendered(placeholder.clone())),
-                            None => return Err(Error::UndefinedPlaceholder(placeholder.clone()))
-                        }
-                    }
-                },
-                &Token::EndAttribute => try!(write!(&mut string_buf, "\\\"")),
-                &Token::Scope(Scope::If(ref cond)) => {
-                    scopes.push(None);
-                    try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
-
-                    try!(write_indent(w, indent));
-                    try!(write!(w, "if "));
-                    try!(self.eval_logic(w, true, &cond.flattened(), params));
-                    try!(write!(w, " {{\n"));
-                    indent += 1;
-                },
-                &Token::Scope(Scope::ForEach(ref collection, ref element, ref opt_key)) => {
-                    try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
-
-                    match find_param(collection, params, &scopes) {
-                        Some((param_ty, content_ty)) => {
-                            match content_ty {
-                                Some(&ContentType::Collection(ref ty, optional)) => {
-                                    try!(write_indent(w, indent));
-
-                                    if let &Some(ref key) = opt_key {
-                                        try!(write!(w, "for ({}, {})", key, element));
-                                    } else {
-                                        try!(write!(w, "for {}", element));
-                                    }
-
-                                    if let ParamTy::Param = param_ty {
-                                        try!(write!(w, " in self.{}", collection));
-                                    } else {
-                                        try!(write!(w, " in {}", collection));
-                                    }
-
-                                    if optional {
-                                        try!(write!(w, ".iter().flat_map(|c| c"));
-                                    }
-
-                                    if opt_key.is_some() {
-                                        try!(write!(w, ".key_values()"));
-                                    } else {
-                                        try!(write!(w, ".values()"));
-                                    }
-
-                                    if optional {
-                                        try!(write!(w, ") {{\n"));
-                                    } else {
-                                        try!(write!(w, " {{\n"));
-                                    }
-
-                                    if let &Some(ref ty) = ty {
-                                        scopes.push(Some((element, ty, opt_key.as_ref())));
-                                    } else {
-                                        return Err(Error::UnknownType(collection.clone()))
-                                    }
-                                },
-                                Some(_ty) => return Err(Error::UnexpectedType(collection.clone(), ContentType::Collection(None, false))),
-                                None => return Err(Error::UnexpectedType(collection.clone(), ContentType::Collection(None, false)))
-                            }
-                        },
-                        None => return Err(Error::UndefinedPlaceholder(collection.clone())),
-                    }
-
-                    indent += 1;
-                },
-                &Token::End => {
-                    try!(try_write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
-
-                    indent -= 1;
-                    line!(w, indent, "}}");
+        {
+            let mut block = w.block();
+            for (parameter, ty) in params {
+                let mut line = block.begin_line();
+                try_w!(line, "pub {}: ", parameter);
+                match write_ty(&mut line, ty) {
+                    Err(Error::UnknownType(_)) => return Err(Error::UnknownType(parameter.clone())),
+                    r => try!(r)
                 }
             }
         }
+        
+        if params.len() > 0 {
+            try_w!(w, "}}");
+        }
 
-        try!(write_and_clear_fmt(w, indent, &mut string_buf, &mut fmt_args));
-        indent -= 1;
+        if params.len() > 0 {
+            try_w!(w, "impl<'a> ::symbiosis_rust::Template for {}<'a> {{", name);
+        } else {
+            try_w!(w, "impl ::symbiosis_rust::Template for {} {{", name);
+        }
 
-        line!(w, indent, "}}");
-        indent -= 1;
+        w.indent();
 
-        line!(w, indent, "}}");
-        Ok(())
+        try_w!(w, "fn render_to(&self, writer: &mut ::std::io::Write) -> ::std::io::Result<()> {{");
+
+        {
+            let mut func = w.block();
+
+            for token in tokens {
+                match token {
+                    &Token::SetDoctype(ref doctype) => {
+                        string_buf.push_str("<!DOCTYPE");
+                        if let Some(ref name) = doctype.name {
+                            try_w!(string_buf, " {}", name);
+                        }
+
+                        if let Some(ref public_id) = doctype.public_id {
+                            try_w!(string_buf, " PUBLIC \\\"{}\\\"", public_id);
+                        } else if doctype.system_id.is_some() {
+                            string_buf.push_str(" SYSTEM");
+                        }
+
+                        if let Some(ref system_id) = doctype.system_id {
+                            try_w!(string_buf, " \\\"{}\\\"", system_id);
+                        }
+                        string_buf.push_str(">");
+                    },
+                    &Token::BeginTag(ref name) => try!(write!(&mut string_buf, "<{}", name.as_slice())),
+                    &Token::EndTag(_self_close) => try!(write!(&mut string_buf, ">")),
+                    &Token::CloseTag(ref name) => try!(write!(&mut string_buf, "</{}>", name.as_slice())),
+                    &Token::BeginAttribute(ref name, ref content) => match content {
+                        &Content::String(ref content) => try!(write!(&mut string_buf, " {}=\\\"{}", name.as_slice(), content)),
+                        &Content::Placeholder(ref placeholder) => {
+                            match find_param(placeholder, params, &scopes) {
+                                Some((param_ty, Some(&ContentType::String(false)))) | Some((param_ty, None)) => {
+                                    try_w!(string_buf, " {}=\\\"{{}}", name.as_slice());
+                                    if let ParamTy::Param = param_ty {
+                                        fmt_args.push(format!("self.{}", placeholder));
+                                    } else {
+                                        fmt_args.push(placeholder.clone());
+                                    }
+                                },
+                                Some((param_ty, Some(&ContentType::String(true)))) => {
+                                    try_w!(string_buf, " {}=\\\"", name.as_slice());
+                                    try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
+
+                                    if let ParamTy::Param = param_ty {
+                                        try_w!(func, "if let Some(val) = self.{} {{", placeholder);
+                                    } else {
+                                        try_w!(func, "if let Some(val) = {} {{", placeholder);
+                                    }
+
+                                    try_w!(func.indented_line(), "try!(write!(writer, \"{{}}\", val));");
+                                    try_w!(func, "}}");
+                                },
+                                Some((param_ty, Some(&ContentType::Template(false)))) => {
+                                    try_w!(string_buf, " {}=\\\"", name.as_slice());
+                                    try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
+
+                                    if let ParamTy::Param = param_ty {
+                                        try_w!(func, "try!(self.{}.render_to(writer));", placeholder);
+                                    } else {
+                                        try_w!(func, "try!({}.render_to(writer));", placeholder);
+                                    }
+                                },
+                                Some((param_ty, Some(&ContentType::Template(true)))) => {
+                                    try!(write!(&mut string_buf, " {}=\\\"", name.as_slice()));
+                                    try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
+
+                                    if let ParamTy::Param = param_ty {
+                                        try_w!(func, "if let Some(template) = self.{} {{", placeholder);
+                                    } else {
+                                        try_w!(func, "if let Some(template) = {} {{", placeholder);
+                                    }
+
+                                    try_w!(func.indented_line(), "try!(template.render_to(writer));");
+                                    try_w!(func, "}}");
+                                },
+                                Some((_, Some(_ty))) => return Err(Error::CannotBeRendered(placeholder.clone())),
+                                None => return Err(Error::UndefinedPlaceholder(placeholder.clone()))
+                            }
+                        }
+                    },
+                    &Token::AppendToAttribute(ref text) | &Token::Text(ref text) => match text {
+                        &Content::String(ref content) => try!(write!(&mut string_buf, "{}", content)),
+                        &Content::Placeholder(ref placeholder) => {
+                            match find_param(placeholder, params, &scopes) {
+                                Some((param_ty, Some(&ContentType::String(false)))) | Some((param_ty, None)) => {
+                                    try!(write!(&mut string_buf, "{{}}"));
+                                    if let ParamTy::Param = param_ty {
+                                        fmt_args.push(format!("self.{}", placeholder));
+                                    } else {
+                                        fmt_args.push(placeholder.clone());
+                                    }
+                                },
+                                Some((param_ty, Some(&ContentType::String(true)))) => {
+                                    try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
+
+                                    if let ParamTy::Param = param_ty {
+                                        try_w!(func, "if let Some(val) = self.{} {{", placeholder);
+                                    } else {
+                                        try_w!(func, "if let Some(val) = {} {{", placeholder);
+                                    }
+
+                                    try_w!(func.indented_line(), "try!(write!(writer, \"{{}}\", val));");
+                                    try_w!(func, "}}");
+                                },
+                                Some((param_ty, Some(&ContentType::Template(false)))) => {
+                                    try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
+
+                                    if let ParamTy::Param = param_ty {
+                                        try_w!(func, "try!(self.{}.render_to(writer));", placeholder);
+                                    } else {
+                                        try_w!(func, "try!({}.render_to(writer));", placeholder);
+                                    }
+                                },
+                                Some((param_ty, Some(&ContentType::Template(true)))) => {
+                                    try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
+
+                                    if let ParamTy::Param = param_ty {
+                                        try_w!(func, "if let Some(template) = self.{} {{", placeholder);
+                                    } else {
+                                        try_w!(func, "if let Some(template) = {} {{", placeholder);
+                                    }
+
+                                    try_w!(func.indented_line(), "try!(template.render_to(writer));");
+                                    try_w!(func, "}}");
+                                },
+                                Some((_, Some(_ty))) => return Err(Error::CannotBeRendered(placeholder.clone())),
+                                None => return Err(Error::UndefinedPlaceholder(placeholder.clone()))
+                            }
+                        }
+                    },
+                    &Token::EndAttribute => try!(write!(&mut string_buf, "\\\"")),
+                    &Token::Scope(Scope::If(ref cond)) => {
+                        scopes.push(None);
+                        try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
+
+                        {
+                            let mut line = func.begin_line();
+                            try_w!(line, "if ");
+                            try!(self.eval_logic(&mut line, true, &cond.flattened(), params));
+                            try_w!(line, " {{");
+                        }
+
+                        func.indent();
+                    },
+                    &Token::Scope(Scope::ForEach(ref collection, ref element, ref opt_key)) => {
+                        try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
+
+                        match find_param(collection, params, &scopes) {
+                            Some((param_ty, content_ty)) => {
+                                match content_ty {
+                                    Some(&ContentType::Collection(ref ty, optional)) => {
+                                        let mut line = func.begin_line();
+
+                                        if let &Some(ref key) = opt_key {
+                                            try_w!(line, "for ({}, {})", key, element);
+                                        } else {
+                                            try_w!(line, "for {}", element);
+                                        }
+
+                                        if let ParamTy::Param = param_ty {
+                                            try_w!(line, " in self.{}", collection);
+                                        } else {
+                                            try_w!(line, " in {}", collection);
+                                        }
+
+                                        if optional {
+                                            try_w!(line, ".iter().flat_map(|c| c");
+                                        }
+
+                                        if opt_key.is_some() {
+                                            try_w!(line, ".key_values()");
+                                        } else {
+                                            try_w!(line, ".values()");
+                                        }
+
+                                        if optional {
+                                            try_w!(line, ") {{\n");
+                                        } else {
+                                            try_w!(line, " {{\n");
+                                        }
+
+                                        if let &Some(ref ty) = ty {
+                                            scopes.push(Some((element, ty, opt_key.as_ref())));
+                                        } else {
+                                            return Err(Error::UnknownType(collection.clone()))
+                                        }
+                                    },
+                                    Some(_ty) => return Err(Error::UnexpectedType(collection.clone(), ContentType::Collection(None, false))),
+                                    None => return Err(Error::UnexpectedType(collection.clone(), ContentType::Collection(None, false)))
+                                }
+                            },
+                            None => return Err(Error::UndefinedPlaceholder(collection.clone())),
+                        }
+
+                        func.indent();
+                    },
+                    &Token::End => {
+                        try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
+
+                        func.unindent();
+                        try_w!(func, "}}");
+                    }
+                }
+            }
+
+            try!(write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
+        }
+
+        try_w!(w, "}}");
+        w.unindent();
+
+        write!(w, "}}").map_err(|e| e.into())
     }
 
-    fn build_module<W, F>(&self, w: &mut W, build_templates: F) -> Result<(), Error> where
+    fn build_module<W, F>(&self, w: &mut Writer<W>, build_templates: F) -> Result<(), Error> where
         W: Write,
-        F: FnOnce(&mut W, u8) -> Result<(), Error>
+        F: FnOnce(&mut Writer<W>) -> Result<(), Error>
     {
-        let indent = if let Some((ref module, ref visibility)) = self.named_module {
+        if let Some((ref module, ref visibility)) = self.named_module {
             match visibility {
-                &Visibility::Public => line!(w, 0, "pub mod {} {{", module),
-                &Visibility::Private => line!(w, 0, "mod {} {{", module)
+                &Visibility::Public => try_w!(w, "pub mod {} {{", module),
+                &Visibility::Private => try_w!(w, "mod {} {{", module)
             }
-            1
-        } else {
-            0
-        };
+            w.indent();
+        }
 
-        try!(build_templates(w, indent));
+        try!(build_templates(w));
 
         if self.named_module.is_some() {
-            line!(w, 0, "}}");
+            try_w!(w, "}}");
         }
 
         Ok(())
     }
 }
 
-fn try_write_and_clear_fmt<W: Write>(w: &mut W, indent: u8, buf: &mut String, args: &mut Vec<String>) -> Result<(), Error> {
+fn try_write_and_clear_fmt<W: Write>(w: &mut Writer<W>, buf: &mut String, args: &mut Vec<String>) -> Result<(), Error> {
     if buf.len() > 0 {
         if args.len() == 0 {
-            line!(w, indent, "try!(write!(writer, \"{}\"));", buf);
+            try_w!(w, "try!(write!(writer, \"{}\"));", buf);
         } else {
-            line!(w, indent, "try!(write!(writer, \"{}\", {}));", buf, args.connect(", "));
+            try_w!(w, "try!(write!(writer, \"{}\", {}));", buf, args.connect(", "));
         }
         buf.clear();
         args.clear();
@@ -420,12 +429,12 @@ fn try_write_and_clear_fmt<W: Write>(w: &mut W, indent: u8, buf: &mut String, ar
     Ok(())
 }
 
-fn write_and_clear_fmt<W: Write>(w: &mut W, indent: u8, buf: &mut String, args: &mut Vec<String>) -> Result<(), Error> {
+fn write_and_clear_fmt<W: Write>(w: &mut Writer<W>, buf: &mut String, args: &mut Vec<String>) -> Result<(), Error> {
     if buf.len() > 0 {
         if args.len() == 0 {
-            line!(w, indent, "write!(writer, \"{}\")", buf);
+            try_w!(w, "write!(writer, \"{}\")", buf);
         } else {
-            line!(w, indent, "write!(writer, \"{}\", {})", buf, args.connect(", "));
+            try_w!(w, "write!(writer, \"{}\", {})", buf, args.connect(", "));
         }
         buf.clear();
         args.clear();
@@ -434,19 +443,19 @@ fn write_and_clear_fmt<W: Write>(w: &mut W, indent: u8, buf: &mut String, args: 
     Ok(())
 }
 
-fn write_ty<W: Write>(w: &mut W, ty: &ContentType) -> Result<(), Error> {
+fn write_ty<W: Write>(w: &mut Line<W>, ty: &ContentType) -> Result<(), Error> {
     if ty.is_optional() {
-        try!(write!(w, "Option<"));
+        try_w!(w, "Option<");
     }
 
     match ty {
-        &ContentType::String(_) => try!(write!(w, "&'a ::std::fmt::Display")),
-        &ContentType::Bool => try!(write!(w, "bool")),
-        &ContentType::Template(_) => try!(write!(w, "&'a ::symbiosis_rust::Template")),
+        &ContentType::String(_) => try_w!(w, "&'a ::std::fmt::Display"),
+        &ContentType::Bool => try_w!(w, "bool"),
+        &ContentType::Template(_) => try_w!(w, "&'a ::symbiosis_rust::Template"),
         &ContentType::Collection(Some(ref inner), _) => {
-            try!(write!(w, "&'a ::symbiosis_rust::Collection<'a, "));
+            try_w!(w, "&'a ::symbiosis_rust::Collection<'a, ");
             try!(write_ty(w, inner));
-            try!(write!(w, ">"));
+            try_w!(w, ">");
         },
         &ContentType::Collection(None, _) => {
             return Err(Error::UnknownType("".into()))
@@ -454,7 +463,7 @@ fn write_ty<W: Write>(w: &mut W, ty: &ContentType) -> Result<(), Error> {
     }
 
     if ty.is_optional() {
-        try!(write!(w, ">"));
+        try_w!(w, ">");
     }
 
     Ok(())

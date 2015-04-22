@@ -134,9 +134,10 @@ impl<'a> TemplateGroup<'a> {
 
     ///Write template code.
     pub fn emit_code<W: Write, C: Codegen>(&self, writer: &mut W, codegen: &C) -> Result<(), C::Error> {
-        codegen.build_module(writer, |w, indent| {
+        let mut writer = codegen.init_writer(writer);
+        codegen.build_module(&mut writer, |w| {
             for template in &self.templates {
-                try!(codegen.build_template(w, &template.name, indent, &template.parameters, &template.tokens));
+                try!(codegen.build_template(w, &template.name, &template.parameters, &template.tokens));
             }
             Ok(())
         })
@@ -204,7 +205,8 @@ impl<'a> Template<'a> {
 
     ///Write template code.
     pub fn emit_code<W: Write, C: Codegen>(&self, template_name: &str, writer: &mut W, codegen: &C) -> Result<(), C::Error> {
-        codegen.build_template(writer, template_name, 0, &self.parameters, &self.tokens)
+        let mut writer = codegen.init_writer(writer);
+        codegen.build_template(&mut writer, template_name, &self.parameters, &self.tokens)
     }
 
     fn set_doctype(&mut self, doctype: Doctype) {
