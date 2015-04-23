@@ -203,9 +203,20 @@ impl<'a, W: Write> Writer<'a, W> {
     pub fn begin_line<'w>(&'w mut self) -> Line<'w, W> {
         Line {
             writer: self.writer,
-            indent: self.indent,
+            indent: self.base_indent + self.indent,
             indent_str: self.indent_str,
-            indent_written: false
+            indent_written: false,
+            end_written: false,
+        }
+    }
+
+    pub fn indented_line<'w>(&'w mut self) -> Line<'w, W> {
+        Line {
+            writer: self.writer,
+            indent: self.base_indent + self.indent + 1,
+            indent_str: self.indent_str,
+            indent_written: false,
+            end_written: false
         }
     }
 
@@ -225,15 +236,6 @@ impl<'a, W: Write> Writer<'a, W> {
         }
     }
 
-    pub fn indented_line<'w>(&'w mut self) -> Line<'w, W> {
-        Line {
-            writer: self.writer,
-            indent: self.indent + 1,
-            indent_str: self.indent_str,
-            indent_written: false
-        }
-    }
-
     pub fn block<'w>(&'w mut self) -> Writer<'w, W> {
         Writer {
             indent_str: self.indent_str,
@@ -248,7 +250,8 @@ pub struct Line<'a, W: Write + 'a> {
     writer: &'a mut W,
     indent: u8,
     indent_str: &'static str,
-    indent_written: bool
+    indent_written: bool,
+    end_written: bool
 }
 
 impl<'a, W: Write> Line<'a, W> {
@@ -263,16 +266,22 @@ impl<'a, W: Write> Line<'a, W> {
 
     #[inline]
     fn write_indent(&mut self) -> io::Result<()> {
-        if self.indent_written {
+        if !self.indent_written {
             for _ in 0..self.indent {
                 try!(self.writer.write_all(self.indent_str.as_bytes()))
             }
+            self.indent_written = true;
         }
         Ok(())
     }
 
     fn write_end(&mut self) -> io::Result<()> {
-        self.writer.write_all(b"\n")
+        if !self.end_written {
+            self.end_written = true;
+            self.writer.write_all(b"\n")
+        } else {
+            Ok(())
+        }
     }
 }
 

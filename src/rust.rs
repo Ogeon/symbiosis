@@ -164,6 +164,7 @@ impl<'a> Codegen for Rust<'a> {
                     Err(Error::UnknownType(_)) => return Err(Error::UnknownType(parameter.clone())),
                     r => try!(r)
                 }
+                try_w!(line, ",");
             }
         }
         
