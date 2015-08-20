@@ -9,7 +9,6 @@ use std::path::Path;
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 use std::cmp::max;
-use std::fmt::Display;
 use std::error::Error;
 
 use symbiosis_rust::{Template, Templates};
@@ -81,10 +80,10 @@ fn display_page(people: &RwLock<Vec<Person>>, context: Context, response: Respon
     let people = people.read().unwrap();
     let cards = Templates::new(&people[..10], |person| {
         templates::Card {
-            id: &person.id,
-            name: &person.name,
-            age: &person.age,
-            supervisor: person.supervisor.as_ref().map(|s| s as &Display)
+            id: person.id.into(),
+            name: (&person.name).into(),
+            age: person.age.into(),
+            supervisor: person.supervisor.as_ref().map(Into::into)
         }
     });
 
@@ -96,9 +95,9 @@ fn display_page(people: &RwLock<Vec<Person>>, context: Context, response: Respon
             //Display info about someone
             let person = &people[id];
             let more_info = templates::MoreInfo {
-                name: &person.name,
-                age: &person.age,
-                supervisor: person.supervisor.as_ref().map(|s| s as &Display),
+                name: (&person.name).into(),
+                age: person.age.into(),
+                supervisor: person.supervisor.as_ref().map(Into::into),
                 projects: &person.projects
             };
             let document = templates::Document {

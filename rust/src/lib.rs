@@ -4,6 +4,91 @@ use std::io::{self, Write};
 use std::iter::{Iterator, IntoIterator, Enumerate};
 use std::fmt;
 use std::collections::btree_map::BTreeMap;
+use std::borrow::Cow;
+
+macro_rules! impl_content {
+    (int $($t: ty),+) => ($(
+        impl<'a> From<$t> for Content<'a> {
+            fn from(i: $t) -> Content<'a> {
+                Content::Int(i as i64)
+            }
+        }
+    )+);
+    (uint $($t: ty),+) => ($(
+        impl<'a> From<$t> for Content<'a> {
+            fn from(u: $t) -> Content<'a> {
+                Content::Uint(u as u64)
+            }
+        }
+    )+);
+    (float $($t: ty),+) => ($(
+        impl<'a> From<$t> for Content<'a> {
+            fn from(f: $t) -> Content<'a> {
+                Content::Float(f as f64)
+            }
+        }
+    )+);
+}
+
+pub enum Content<'a> {
+    String(String),
+    Str(&'a str),
+    Cow(Cow<'a, str>),
+    Int(i64),
+    Uint(u64),
+    Float(f64),
+    Display(Box<fmt::Display + 'a>),
+    DisplayRef(&'a fmt::Display),
+}
+
+impl<'a> fmt::Display for Content<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Content::String(ref a) => a.fmt(f),
+            Content::Str(a) => a.fmt(f),
+            Content::Cow(ref a) => a.fmt(f),
+            Content::Int(a) => a.fmt(f),
+            Content::Uint(a) => a.fmt(f),
+            Content::Float(a) => a.fmt(f),
+            Content::Display(ref a) => a.fmt(f),
+            Content::DisplayRef(a) => a.fmt(f),
+        }
+    }
+}
+
+impl<'a> From<String> for Content<'a> {
+    fn from(s: String) -> Content<'a> {
+        Content::String(s)
+    }
+}
+
+impl<'a> From<&'a str> for Content<'a> {
+    fn from(s: &'a str) -> Content<'a> {
+        Content::Str(s)
+    }
+}
+
+impl<'a> From<Cow<'a, str>> for Content<'a> {
+    fn from(c: Cow<'a, str>) -> Content<'a> {
+        Content::Cow(c)
+    }
+}
+
+impl<'a, D: fmt::Display + 'a> From<Box<D>> for Content<'a> {
+    fn from(d: Box<D>) -> Content<'a> {
+        Content::Display(d as Box<fmt::Display + 'a>)
+    }
+}
+
+impl<'a, D: fmt::Display + 'a> From<&'a D> for Content<'a> {
+    fn from(d: &'a D) -> Content<'a> {
+        Content::DisplayRef(d as &'a fmt::Display)
+    }
+}
+
+impl_content!(int i8, i16, i32, i64, isize);
+impl_content!(uint u8, u16, u32, u64, usize);
+impl_content!(float f32, f64);
 
 ///Common trait for Symbiosis templates.
 pub trait Template {
@@ -84,11 +169,11 @@ impl<'a, T: 'a> Collection<'a, &'a Template> for Vec<T> where
     }
 }
 
-impl<'a, T: 'a> Collection<'a, &'a fmt::Display> for Vec<T> where
-    T: fmt::Display
+impl<'a, T: 'a> Collection<'a, Content<'a>> for Vec<T> where
+    &'a T: Into<Content<'a>>
 {
-    fn values(&'a self) -> Box<Iterator<Item=&'a fmt::Display> + 'a> {
-        Box::new(self.iter().map(|i| i as &fmt::Display))
+    fn values(&'a self) -> Box<Iterator<Item=Content<'a>> + 'a> {
+        Box::new(self.iter().map(|i| i.into()))
     }
 }
 
@@ -115,11 +200,11 @@ impl<'a, T: 'a> Collection<'a, &'a Template> for &'a [T] where
     }
 }
 
-impl<'a, T: 'a> Collection<'a, &'a fmt::Display> for &'a [T] where
-    T: fmt::Display
+impl<'a, T: 'a> Collection<'a, Content<'a>> for &'a [T] where
+    &'a T: Into<Content<'a>>
 {
-    fn values(&'a self) -> Box<Iterator<Item=&'a fmt::Display> + 'a> {
-        Box::new(self.into_iter().map(|i| i as &fmt::Display))
+    fn values(&'a self) -> Box<Iterator<Item=Content<'a>> + 'a> {
+        Box::new(self.into_iter().map(|i| i.into()))
     }
 }
 
@@ -157,16 +242,16 @@ impl<'a, K, T: 'a> Collection<'a, &'a Template> for BTreeMap<K, T> where
     }
 }
 
-impl<'a, K, T: 'a> Collection<'a, &'a fmt::Display> for BTreeMap<K, T> where
+impl<'a, K, T: 'a> Collection<'a, Content<'a>> for BTreeMap<K, T> where
     K: fmt::Display,
-    T: fmt::Display
+    &'a T: Into<Content<'a>>
 {
-    fn values(&'a self) -> Box<Iterator<Item=&'a fmt::Display> + 'a> {
-        Box::new(self.values().map(|i| i as &fmt::Display))
+    fn values(&'a self) -> Box<Iterator<Item=Content<'a>> + 'a> {
+        Box::new(self.values().map(|i| i.into()))
     }
 
-    fn key_values(&'a self) -> KeyValues<'a, &'a fmt::Display> {
-        KeyValues::Map(Box::new(self.iter().map(|(k, i)| (k as &fmt::Display, i as &fmt::Display))))
+    fn key_values(&'a self) -> KeyValues<'a, Content<'a>> {
+        KeyValues::Map(Box::new(self.iter().map(|(k, i)| (k as &fmt::Display, i.into()))))
     }
 }
 

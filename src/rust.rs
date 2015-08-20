@@ -230,7 +230,7 @@ impl<'a> Codegen for Rust<'a> {
                                     try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
 
                                     if let ParamTy::Param = param_ty {
-                                        try_w!(func, "if let Some(val) = self.{} {{", placeholder);
+                                        try_w!(func, "if let Some(ref val) = self.{} {{", placeholder);
                                     } else {
                                         try_w!(func, "if let Some(val) = {} {{", placeholder);
                                     }
@@ -282,7 +282,7 @@ impl<'a> Codegen for Rust<'a> {
                                     try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
 
                                     if let ParamTy::Param = param_ty {
-                                        try_w!(func, "if let Some(val) = self.{} {{", placeholder);
+                                        try_w!(func, "if let Some(ref val) = self.{} {{", placeholder);
                                     } else {
                                         try_w!(func, "if let Some(val) = {} {{", placeholder);
                                     }
@@ -456,7 +456,7 @@ fn write_ty<W: Write>(w: &mut Line<W>, ty: &ContentType) -> Result<(), Error> {
     }
 
     match ty {
-        &ContentType::String(_) => try_w!(w, "&'a ::std::fmt::Display"),
+        &ContentType::String(_) => try_w!(w, "::symbiosis_rust::Content<'a>"),
         &ContentType::Bool => try_w!(w, "bool"),
         &ContentType::Template(_) => try_w!(w, "&'a ::symbiosis_rust::Template"),
         &ContentType::Collection(Some(ref inner), _) => {
