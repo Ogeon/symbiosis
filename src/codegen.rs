@@ -2,6 +2,8 @@ use std::io::{self, Write};
 use std::collections::HashMap;
 use std::fmt;
 
+use tendril::StrTendril;
+
 use string_cache::atom::Atom;
 use html5ever::tokenizer::Doctype;
 
@@ -20,7 +22,7 @@ pub trait Codegen {
     fn init_writer<'a, W: Write>(&self, w: &'a mut W) -> Writer<'a, W>;
 
     ///Generate code for a single template.
-    fn build_template<W: Write>(&self, w: &mut Writer<W>, name: &str, params: &HashMap<String, ContentType>, tokens: &[Token]) -> Result<(), Self::Error>;
+    fn build_template<W: Write>(&self, w: &mut Writer<W>, name: &str, params: &HashMap<StrTendril, ContentType>, tokens: &[Token]) -> Result<(), Self::Error>;
 
     ///Generate code for a module or a similar collection containing multiple templates.
     fn build_module<W, F>(&self, w: &mut Writer<W>, build_templates: F) -> Result<(), Self::Error> where
@@ -52,7 +54,7 @@ pub enum Scope {
     If(Logic),
     ///Repeat the content within the scope for each element in a collection.
     ///Args: collection, element, optional key
-    ForEach(String, String, Option<String>)
+    ForEach(StrTendril, StrTendril, Option<StrTendril>)
 }
 
 ///Logic expressions.
@@ -64,17 +66,17 @@ pub enum Logic {
     ///The logical complement of an expression.
     Not(Box<Logic>),
     ///A value from a template parameter.
-    Value(String)
+    Value(StrTendril)
 }
 
 impl Logic {
-    pub fn placeholders(&self) -> Vec<&str> {
+    pub fn placeholders(&self) -> Vec<&StrTendril> {
         let mut res = vec![];
         self.placeholders_r(&mut res);
         res
     }
 
-    fn placeholders_r<'a>(&'a self, res: &mut Vec<&'a str>) {
+    fn placeholders_r<'a>(&'a self, res: &mut Vec<&'a StrTendril>) {
         match self {
             &Logic::And(ref conds) => for cond in conds {
                 cond.placeholders_r(res);
@@ -105,10 +107,10 @@ impl Logic {
 ///Types of text content.
 pub enum Content {
     ///A plain string.
-    String(String),
+    String(StrTendril),
 
     ///Use content from a parameter in a placeholder.
-    Placeholder(String)
+    Placeholder(StrTendril)
 }
 
 ///Types of template parameter content.

@@ -8,9 +8,7 @@ build = "build.rs"
 [dependencies]
 rand = "*"
 rustc-serialize = "*"
-
-[dependencies.rustful]
-git = "https://github.com/Ogeon/rustful"
+rustful = "0.4"
 
 [dependencies.symbiosis-rust]
 path = "../rust"

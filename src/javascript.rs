@@ -3,6 +3,9 @@ use std::collections::HashMap;
 use std::default::Default;
 use std::borrow::ToOwned;
 use std::fmt;
+use std::fmt::Write as FmtWrite;
+
+use tendril::StrTendril;
 
 use string_cache::atom::Atom;
 
@@ -70,7 +73,7 @@ pub struct JavaScript<'a> {
 }
 
 impl<'a> JavaScript<'a> {
-    fn eval_logic<W: Write>(&self, w: &mut Line<W>, first: bool, cond: &Logic, params: &HashMap<String, ContentType>) -> Result<(), Error> {
+    fn eval_logic<W: Write>(&self, w: &mut Line<W>, first: bool, cond: &Logic, params: &HashMap<StrTendril, ContentType>) -> Result<(), Error> {
         match cond {
             &Logic::And(ref conds) => {
                 if !first {
@@ -130,7 +133,7 @@ impl<'a> Codegen for JavaScript<'a> {
         Writer::new(w, "    ")
     }
 
-    fn build_template<W: Write>(&self, w: &mut Writer<W>, name: &str, params: &HashMap<String, ContentType>, tokens: &[Token]) -> Result<(), Error> {
+    fn build_template<W: Write>(&self, w: &mut Writer<W>, name: &str, params: &HashMap<StrTendril, ContentType>, tokens: &[Token]) -> Result<(), Error> {
         if let Some(namespace) = self.namespace {
             try_w!(w, "{}.{} = function() {{", namespace, name);
         } else {
@@ -352,8 +355,8 @@ impl<'a> Codegen for JavaScript<'a> {
                         let (collection_name, ty) = match find_param(collection, params, &scopes) {
                             Some((Some(ref name), Some(&ContentType::Collection(ref ty, _)))) => ((*name).to_owned(), ty),
                             Some((None, Some(&ContentType::Collection(ref ty, _)))) => (format!("this.{}", collection), ty),
-                            Some((_, _)) => return Err(Error::UnexpectedType(collection.clone(), ContentType::Collection(None, false))),
-                            None => return Err(Error::UndefinedPlaceholder(collection.clone()))
+                            Some((_, _)) => return Err(Error::UnexpectedType(collection.into(), ContentType::Collection(None, false))),
+                            None => return Err(Error::UndefinedPlaceholder(collection.into()))
                         };
 
                         var_counter += 1;
@@ -371,9 +374,9 @@ impl<'a> Codegen for JavaScript<'a> {
                         }
 
                         if let &Some(ref ty) = ty {
-                            scopes.push(Some((element, value, ty, opt_key.as_ref().map(|k| (k, key)))));
+                            scopes.push(Some((element, value, ty, opt_key.clone().map(|k| (k, key)))));
                         } else {
-                            return Err(Error::UnknownType(collection.clone()));
+                            return Err(Error::UnknownType(collection.into()));
                         }
                     },
                     &Token::End => {
@@ -463,20 +466,25 @@ fn to_valid_ident(name: &str) -> String {
     name.chars().map(|c| if !c.is_alphanumeric() { '_' } else { c }).collect()
 }
 
-fn find_param<'a, 'b>(param: &str, params: &'a HashMap<String, ContentType>, scopes: &'b [Option<(&'a str, String, &'a ContentType, Option<(&'a String, String)>)>]) -> Option<(Option<&'b str>, Option<&'a ContentType>)> {
+fn find_param<'a, 'b>(param: &StrTendril, params: &'a HashMap<StrTendril, ContentType>, scopes: &'b [Option<(&'a str, String, &'a ContentType, Option<(StrTendril, String)>)>]) -> Option<(Option<&'b str>, Option<&'a ContentType>)> {
+    println!("looking for '{}' in {} scopes", param, scopes.len());
     for scope in scopes.iter().rev() {
         if let &Some((ref name, ref alias, ref ty, ref opt_key)) = scope {
-            if *name == param {
+            println!("name: '{}', param: '{}'", name, param);
+            if *name == &**param {
                 return Some((Some(alias), Some(ty)));
             } else if let &Some((ref key, ref alias)) = opt_key {
-                if *key == param {
+                if key == param {
                     return Some((Some(alias), None))
                 }
             }
         }
     }
 
-    params.get(param).map(|t| (None, Some(t)))
+    params.get(param).map(|t| {
+        println!("global type of '{}' is {}", param, t);
+        (None, Some(t))
+    })
 }
 
 fn append_text<W: Write>(w: &mut Writer<W>, var: &str, state: &mut TextState, tag: &str) -> Result<(), Error> {
@@ -493,8 +501,8 @@ fn write_attribute<'a, W: Write>(
     var: &str,
     content: &Content,
     new: bool,
-    params: &'a HashMap<String, ContentType>,
-    scopes: &[Option<(&'a str, String, &'a ContentType, Option<(&'a String, String)>)>]
+    params: &'a HashMap<StrTendril, ContentType>,
+    scopes: &[Option<(&'a str, String, &'a ContentType, Option<(StrTendril, String)>)>]
 ) -> Result<(), Error> {
     match content {
         &Content::String(ref content) => {
@@ -523,9 +531,9 @@ fn write_attribute<'a, W: Write>(
                     try_w!(w, "}}");
                 },
                 Some((_, Some(&ContentType::Template(_)))) | Some((_, Some(&ContentType::Collection(_, _)))) => {
-                    return Err(Error::CannotBeAttribute(placeholder.clone()));
+                    return Err(Error::CannotBeAttribute(placeholder.into()));
                 },
-                None => return Err(Error::UndefinedPlaceholder(placeholder.clone()))
+                None => return Err(Error::UndefinedPlaceholder(placeholder.into()))
             }
         }
     }
@@ -539,12 +547,12 @@ fn write_text<'a, W: Write>(
     state: &mut TextState,
     content: &Content,
     parent: &str,
-    params: &'a HashMap<String, ContentType>,
-    scopes: &[Option<(&'a str, String, &'a ContentType, Option<(&'a String, String)>)>]
+    params: &'a HashMap<StrTendril, ContentType>,
+    scopes: &[Option<(&'a str, String, &'a ContentType, Option<(StrTendril, String)>)>]
 ) -> Result<(), Error> {
     match content {
         &Content::String(ref content) => if content.len() > 0 {
-            try_w!(w, "{} += \"{}\";", var, content);
+            try_w!(w, "{} += \"{}\";", var, Sanitized(content));
             *state = TextState::HasContent;
         },
         &Content::Placeholder(ref placeholder) => {
@@ -593,12 +601,33 @@ fn write_text<'a, W: Write>(
                     try_w!(w, "}}");
                 },
                 Some((_, Some(&ContentType::Collection(_, _)))) => {
-                    return Err(Error::CannotBeText(placeholder.clone()));
+                    return Err(Error::CannotBeText(placeholder.into()));
                 },
-                None => return Err(Error::UndefinedPlaceholder(placeholder.clone()))
+                None => return Err(Error::UndefinedPlaceholder(placeholder.into()))
             }
         }
     }
 
     Ok(())
+}
+
+struct Sanitized<S>(S);
+
+impl<S> fmt::Display for Sanitized<S> where S: AsRef<str> {
+    fn fmt(&self, f: &mut fmt::Formatter) ->  fmt::Result {
+        for c in self.0.as_ref().chars() {
+            match c {
+                '&' => try!(f.write_str("&amp;")),
+                '<' => try!(f.write_str("&lt;")),
+                '>' => try!(f.write_str("&gt;")),
+                '"' => try!(f.write_str("&quot;")),
+                '\'' => try!(f.write_str("&#39;")),
+                '\n' => try!(f.write_str("\\n")),
+                '\t' => try!(f.write_str("\\t")),
+                c => try!(f.write_char(c))
+            }
+        }
+
+        Ok(())
+    }
 }

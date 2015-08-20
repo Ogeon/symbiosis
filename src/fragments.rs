@@ -1,5 +1,7 @@
 use std::borrow::Cow;
 
+use tendril::StrTendril;
+
 use codegen::{Scope, Logic, ContentType};
 
 macro_rules! impl_fragment {
@@ -47,9 +49,9 @@ impl<'a, F: Fragment> Fragment for &'a F {
 ///Things that can be returned from fragments.
 pub enum ReturnType {
     ///A plane text string.
-    String(String),
+    String(StrTendril),
     ///A placeholder parameter and its preferred content type.
-    Placeholder(String, ContentType),
+    Placeholder(StrTendril, ContentType),
     ///A logic expression.
     Logic(Logic),
     ///The beginning of a scope.
@@ -61,7 +63,7 @@ pub enum ReturnType {
 ///Things that can be sent into fragments.
 pub enum InputType {
     ///A placeholder parameter and its preferred content type.
-    Placeholder(String, ContentType),
+    Placeholder(StrTendril, ContentType),
     ///A logic expression.
     Logic(Logic)
 }

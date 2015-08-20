@@ -4,7 +4,13 @@ use std::collections::HashMap;
 use std::default::Default;
 use std::fmt;
 
+use tendril::StrTendril;
+
 use codegen::{Codegen, Writer, Line, Logic, Token, Scope, ContentType, Content};
+
+macro_rules! try_w_s {
+    ($w: expr, $fmt: tt, $($arg: expr),*) => (try_w!($w, $fmt, $(Sanitized($arg)),*))
+}
 
 #[derive(Debug)]
 pub enum Error {
@@ -65,7 +71,7 @@ pub struct Rust<'a> {
 }
 
 impl<'a> Rust<'a> {
-    fn eval_logic<W: Write>(&self, w: &mut Line<W>, first: bool, cond: &Logic, params: &HashMap<String, ContentType>) -> Result<(), Error> {
+    fn eval_logic<W: Write>(&self, w: &mut Line<W>, first: bool, cond: &Logic, params: &HashMap<StrTendril, ContentType>) -> Result<(), Error> {
         match cond {
             &Logic::And(ref conds) => {
                 if !first {
@@ -130,7 +136,7 @@ impl<'a> Codegen for Rust<'a> {
         Writer::new(w, "    ")
     }
     
-    fn build_template<W: Write>(&self, w: &mut Writer<W>, name: &str, params: &HashMap<String, ContentType>, tokens: &[Token]) -> Result<(), Error> {
+    fn build_template<W: Write>(&self, w: &mut Writer<W>, name: &str, params: &HashMap<StrTendril, ContentType>, tokens: &[Token]) -> Result<(), Error> {
         let public = match (&self.visibility, &self.named_module) {
             (&Visibility::Public, _) => true,
             (_, &Some(_)) => true,
@@ -161,7 +167,7 @@ impl<'a> Codegen for Rust<'a> {
                 let mut line = block.begin_line();
                 try_w!(line, "pub {}: ", parameter);
                 match write_ty(&mut line, ty) {
-                    Err(Error::UnknownType(_)) => return Err(Error::UnknownType(parameter.clone())),
+                    Err(Error::UnknownType(_)) => return Err(Error::UnknownType(parameter.into())),
                     r => try!(r)
                 }
                 try_w!(line, ",");
@@ -190,37 +196,37 @@ impl<'a> Codegen for Rust<'a> {
                     &Token::SetDoctype(ref doctype) => {
                         string_buf.push_str("<!DOCTYPE");
                         if let Some(ref name) = doctype.name {
-                            try_w!(string_buf, " {}", name);
+                            try_w_s!(string_buf, " {}", name);
                         }
 
                         if let Some(ref public_id) = doctype.public_id {
-                            try_w!(string_buf, " PUBLIC \\\"{}\\\"", public_id);
+                            try_w_s!(string_buf, " PUBLIC \\\"{}\\\"", public_id);
                         } else if doctype.system_id.is_some() {
                             string_buf.push_str(" SYSTEM");
                         }
 
                         if let Some(ref system_id) = doctype.system_id {
-                            try_w!(string_buf, " \\\"{}\\\"", system_id);
+                            try_w_s!(string_buf, " \\\"{}\\\"", system_id);
                         }
                         string_buf.push_str(">");
                     },
-                    &Token::BeginTag(ref name) => try!(write!(&mut string_buf, "<{}", name.as_slice())),
-                    &Token::EndTag(_self_close) => try!(write!(&mut string_buf, ">")),
-                    &Token::CloseTag(ref name) => try!(write!(&mut string_buf, "</{}>", name.as_slice())),
+                    &Token::BeginTag(ref name) => try_w_s!(string_buf, "<{}", name.as_slice()),
+                    &Token::EndTag(_self_close) => string_buf.push_str(">"),
+                    &Token::CloseTag(ref name) => try_w_s!(string_buf, "</{}>", name.as_slice()),
                     &Token::BeginAttribute(ref name, ref content) => match content {
-                        &Content::String(ref content) => try!(write!(&mut string_buf, " {}=\\\"{}", name.as_slice(), content)),
+                        &Content::String(ref content) => try_w_s!(string_buf, " {}=\\\"{}", name.as_slice(), content),
                         &Content::Placeholder(ref placeholder) => {
                             match find_param(placeholder, params, &scopes) {
                                 Some((param_ty, Some(&ContentType::String(false)))) | Some((param_ty, None)) => {
-                                    try_w!(string_buf, " {}=\\\"{{}}", name.as_slice());
+                                    try_w_s!(string_buf, " {}=\\\"{{}}", name.as_slice());
                                     if let ParamTy::Param = param_ty {
                                         fmt_args.push(format!("self.{}", placeholder));
                                     } else {
-                                        fmt_args.push(placeholder.clone());
+                                        fmt_args.push(placeholder.into());
                                     }
                                 },
                                 Some((param_ty, Some(&ContentType::String(true)))) => {
-                                    try_w!(string_buf, " {}=\\\"", name.as_slice());
+                                    try_w_s!(string_buf, " {}=\\\"", name.as_slice());
                                     try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
 
                                     if let ParamTy::Param = param_ty {
@@ -233,7 +239,7 @@ impl<'a> Codegen for Rust<'a> {
                                     try_w!(func, "}}");
                                 },
                                 Some((param_ty, Some(&ContentType::Template(false)))) => {
-                                    try_w!(string_buf, " {}=\\\"", name.as_slice());
+                                    try_w_s!(string_buf, " {}=\\\"", name.as_slice());
                                     try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
 
                                     if let ParamTy::Param = param_ty {
@@ -243,7 +249,7 @@ impl<'a> Codegen for Rust<'a> {
                                     }
                                 },
                                 Some((param_ty, Some(&ContentType::Template(true)))) => {
-                                    try!(write!(&mut string_buf, " {}=\\\"", name.as_slice()));
+                                    try_w_s!(string_buf, " {}=\\\"", name.as_slice());
                                     try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
 
                                     if let ParamTy::Param = param_ty {
@@ -255,21 +261,21 @@ impl<'a> Codegen for Rust<'a> {
                                     try_w!(func.indented_line(), "try!(template.render_to(writer));");
                                     try_w!(func, "}}");
                                 },
-                                Some((_, Some(_ty))) => return Err(Error::CannotBeRendered(placeholder.clone())),
-                                None => return Err(Error::UndefinedPlaceholder(placeholder.clone()))
+                                Some((_, Some(_ty))) => return Err(Error::CannotBeRendered(placeholder.into())),
+                                None => return Err(Error::UndefinedPlaceholder(placeholder.into()))
                             }
                         }
                     },
                     &Token::AppendToAttribute(ref text) | &Token::Text(ref text) => match text {
-                        &Content::String(ref content) => try!(write!(&mut string_buf, "{}", content)),
+                        &Content::String(ref content) => try_w_s!(string_buf, "{}", content),
                         &Content::Placeholder(ref placeholder) => {
                             match find_param(placeholder, params, &scopes) {
                                 Some((param_ty, Some(&ContentType::String(false)))) | Some((param_ty, None)) => {
-                                    try!(write!(&mut string_buf, "{{}}"));
+                                    string_buf.push_str("{}");
                                     if let ParamTy::Param = param_ty {
                                         fmt_args.push(format!("self.{}", placeholder));
                                     } else {
-                                        fmt_args.push(placeholder.clone());
+                                        fmt_args.push(placeholder.into());
                                     }
                                 },
                                 Some((param_ty, Some(&ContentType::String(true)))) => {
@@ -305,12 +311,12 @@ impl<'a> Codegen for Rust<'a> {
                                     try_w!(func.indented_line(), "try!(template.render_to(writer));");
                                     try_w!(func, "}}");
                                 },
-                                Some((_, Some(_ty))) => return Err(Error::CannotBeRendered(placeholder.clone())),
-                                None => return Err(Error::UndefinedPlaceholder(placeholder.clone()))
+                                Some((_, Some(_ty))) => return Err(Error::CannotBeRendered(placeholder.into())),
+                                None => return Err(Error::UndefinedPlaceholder(placeholder.into()))
                             }
                         }
                     },
-                    &Token::EndAttribute => try!(write!(&mut string_buf, "\\\"")),
+                    &Token::EndAttribute => string_buf.push_str("\\\""),
                     &Token::Scope(Scope::If(ref cond)) => {
                         scopes.push(None);
                         try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
@@ -362,16 +368,16 @@ impl<'a> Codegen for Rust<'a> {
                                         }
 
                                         if let &Some(ref ty) = ty {
-                                            scopes.push(Some((element, ty, opt_key.as_ref())));
+                                            scopes.push(Some((element, ty, opt_key.clone())));
                                         } else {
-                                            return Err(Error::UnknownType(collection.clone()))
+                                            return Err(Error::UnknownType(collection.into()))
                                         }
                                     },
-                                    Some(_ty) => return Err(Error::UnexpectedType(collection.clone(), ContentType::Collection(None, false))),
-                                    None => return Err(Error::UnexpectedType(collection.clone(), ContentType::Collection(None, false)))
+                                    Some(_ty) => return Err(Error::UnexpectedType(collection.into(), ContentType::Collection(None, false))),
+                                    None => return Err(Error::UnexpectedType(collection.into(), ContentType::Collection(None, false)))
                                 }
                             },
-                            None => return Err(Error::UndefinedPlaceholder(collection.clone())),
+                            None => return Err(Error::UndefinedPlaceholder(collection.into())),
                         }
 
                         func.indent();
@@ -470,13 +476,13 @@ fn write_ty<W: Write>(w: &mut Line<W>, ty: &ContentType) -> Result<(), Error> {
     Ok(())
 }
 
-fn find_param<'a>(param: &str, params: &'a HashMap<String, ContentType>, scopes: &[Option<(&str, &'a ContentType, Option<&String>)>]) -> Option<(ParamTy, Option<&'a ContentType>)> {
+fn find_param<'a>(param: &StrTendril, params: &'a HashMap<StrTendril, ContentType>, scopes: &[Option<(&str, &'a ContentType, Option<StrTendril>)>]) -> Option<(ParamTy, Option<&'a ContentType>)> {
     for scope in scopes.iter().rev() {
         if let &Some((ref name, ref ty, ref opt_key)) = scope {
-            if *name == param {
+            if *name == &**param {
                 return Some((ParamTy::Scope,Some(ty)));
             } else if let &Some(ref key) = opt_key {
-                if *key == param {
+                if key == param {
                     return Some((ParamTy::Scope, None))
                 }
             }
@@ -484,4 +490,26 @@ fn find_param<'a>(param: &str, params: &'a HashMap<String, ContentType>, scopes:
     }
 
     params.get(param).map(|t| (ParamTy::Param,Some(t)))
+}
+
+struct Sanitized<S>(S);
+
+impl<S> fmt::Display for Sanitized<S> where S: AsRef<str> {
+    fn fmt(&self, f: &mut fmt::Formatter) ->  fmt::Result {
+        for c in self.0.as_ref().chars() {
+            match c {
+                '&' => try!(f.write_str("&amp;")),
+                '<' => try!(f.write_str("&lt;")),
+                '>' => try!(f.write_str("&gt;")),
+                '"' => try!(f.write_str("&quot;")),
+                '\n' => try!(f.write_str("\\n")),
+                '\t' => try!(f.write_str("\\t")),
+                '{' => try!(f.write_str("&#123;")),
+                '}' => try!(f.write_str("&#125;")),
+                c => try!(f.write_char(c))
+            }
+        }
+
+        Ok(())
+    }
 }

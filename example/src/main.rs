@@ -4,20 +4,20 @@ extern crate rand;
 extern crate rustc_serialize;
 
 use std::str::FromStr;
-use std::io::Read;
-use std::fs::File;
+use std::io::{self, Read};
 use std::path::Path;
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 use std::cmp::max;
 use std::fmt::Display;
+use std::error::Error;
 
 use symbiosis_rust::{Template, Templates};
 
 use rustful::{Server, TreeRouter, Context, Response, Handler};
-use rustful::Method::Get;
 use rustful::StatusCode::{NotFound, InternalServerError};
 use rustful::header::ContentType;
+use rustful::file;
 
 use rand::Rng;
 
@@ -42,7 +42,14 @@ fn main() {
         }
     };
 
-    if let Err(e) = Server::new().handlers(router).port(8080).run() {
+    let res = Server {
+        handlers: router,
+        host: 8080.into(),
+        content_type: content_type!(Text/Html; Charset = Utf8),
+        ..Server::default()
+    }.run();
+
+    if let Err(e) = res {
         println!("Could not start the server: {}", e);
     }
 }
@@ -56,12 +63,10 @@ impl Handler for HandlerFn {
 }
 
 ///Do the initial page rendering and send it to the client.
-fn display_page(people: &RwLock<Vec<Person>>, context: Context, mut response: Response) {
-    response.set_header(ContentType(content_type!("text", "html", ("charset", "utf-8"))));
-
+fn display_page(people: &RwLock<Vec<Person>>, context: Context, response: Response) {
     //Get the id of the requested person, if any, and make sure there are enough generated people
     let len = people.read().unwrap().len();
-    let id: Option<usize> = context.variables.get("id").and_then(|v| FromStr::from_str(v).ok());
+    let id: Option<usize> = context.variables.get("id").and_then(|v| FromStr::from_str(&v).ok());
 
     let min_len = if let Some(id) = id {
         max(id + 1, 10)
@@ -85,7 +90,7 @@ fn display_page(people: &RwLock<Vec<Person>>, context: Context, mut response: Re
 
     //Use the buffer as a &str in the document template.
     //This should always work as long as the templates are correct.
-    let mut writer = response.into_writer();
+    let mut writer: Vec<u8> = Vec::new();
     match id {
         Some(id) => {
             //Display info about someone
@@ -111,6 +116,8 @@ fn display_page(people: &RwLock<Vec<Person>>, context: Context, mut response: Re
             document.render_to(&mut writer).ok();
         }
     }
+
+    response.send(writer);
 }
 
 ///Just some resource loading code.
@@ -124,45 +131,26 @@ fn get_resource(_: &RwLock<Vec<Person>>, context: Context, mut response: Respons
             return;
         }
     };
-    let path = base.join(filename);
-    let (primary, secondary) = match path.extension().and_then(|e| e.to_str()) {
-        Some("css") => ("text", "css"),
-        Some("js") => ("text", "javascript"),
-        _ => {
+    let path = base.join(&*filename);
+    let res = file::Loader::new().send_file(&path, response);
+    if let Err(file::Error::Open(e, mut response)) = res {
+        if let io::ErrorKind::NotFound = e.kind() {
             response.set_status(NotFound);
-            return;
-        }
-    };
-    response.set_header(ContentType(content_type!(primary, secondary)));
-
-    let mut buf = vec![0;512];
-
-    let mut file = match File::open(&path) {
-        Ok(f) => f,
-        Err(_) => {
-            response.set_status(NotFound);
-            return;
-        }
-    };
-
-    let mut writer = response.into_writer();
-
-    loop {
-        match file.read(&mut buf) {
-            Ok(n) if n == 0 => break,
-            Err(_) => break,
-            Ok(n) => {writer.send(&buf[..n]).ok();}
+        } else {
+            //Something went horribly wrong
+            context.log.error(&format!("failed to open '{}': {}", path.display(), e.description()));
+            response.set_status(InternalServerError);
         }
     }
 }
 
 ///Generate a bunch of people and send them as JSON.
 fn load_more(people: &RwLock<Vec<Person>>, context: Context, mut response: Response) {
-    response.set_header(ContentType(content_type!("application", "json", ("charset", "utf-8"))));
+    response.headers_mut().set(ContentType(content_type!(Application/Json; Charset = Utf8)));
 
     //Get the id from where the sequence of people starts and make sure we have generated enough
     let len = people.read().unwrap().len();
-    let from = context.variables.get("from").and_then(|v| FromStr::from_str(v).ok()).unwrap_or(len);
+    let from = context.variables.get("from").and_then(|v| FromStr::from_str(&v).ok()).unwrap_or(len);
     
     if len < from + 10 {
         gen_people(&mut people.write().unwrap(), from + 10);
@@ -173,7 +161,7 @@ fn load_more(people: &RwLock<Vec<Person>>, context: Context, mut response: Respo
     let people_refs: Vec<_> = people[from..from+10].iter().collect();
     
     match json::encode(&people_refs) {
-        Ok(json) => {response.into_writer().send(json).ok();},
+        Ok(json) => response.send(json),
         Err(e) => {
             context.log.error(&format!("failed to encode people list as json: {}", e));
             response.set_status(InternalServerError);
@@ -183,17 +171,17 @@ fn load_more(people: &RwLock<Vec<Person>>, context: Context, mut response: Respo
 
 ///Generate a bunch of people and send them as JSON.
 fn load_person(people: &RwLock<Vec<Person>>, context: Context, mut response: Response) {
-    response.set_header(ContentType(content_type!("application", "json", ("charset", "utf-8"))));
+    response.headers_mut().set(ContentType(content_type!(Application/Json; Charset = Utf8)));
 
     let len = people.read().unwrap().len();
-    let id = context.variables.get("id").and_then(|v| FromStr::from_str(v).ok()).unwrap_or(0);
+    let id = context.variables.get("id").and_then(|v| FromStr::from_str(&v).ok()).unwrap_or(0);
     
     if len <= id {
         gen_people(&mut people.write().unwrap(), id + 1);
     }
     
     match json::encode(&people.read().unwrap()[id]) {
-        Ok(json) => {response.into_writer().send(json).ok();},
+        Ok(json) => response.send(json),
         Err(e) => {
             context.log.error(&format!("failed to encode people list as json: {}", e));
             response.set_status(InternalServerError);

@@ -1,11 +1,12 @@
 extern crate html5ever;
 extern crate string_cache;
+extern crate tendril;
 
 use std::path::Path;
 use std::fs::{File, read_dir};
 use std::io::{self, Read, Write};
 use std::default::Default;
-use std::borrow::{Cow, ToOwned};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::fmt;
@@ -16,6 +17,8 @@ use html5ever::tokenizer::{Tokenizer, TokenSink, Tag, TagKind, Doctype};
 use html5ever::tokenizer::Token as HtmlToken;
 
 use string_cache::atom::Atom;
+
+use tendril::StrTendril;
 
 use codegen::{Token, Content, Codegen, ContentType, Scope};
 use fragments::{Fragment, ReturnType};
@@ -146,16 +149,16 @@ impl<'a> TemplateGroup<'a> {
 
 struct ParsedTemplate {
     name: String,
-    parameters: HashMap<String, ContentType>,
+    parameters: HashMap<StrTendril, ContentType>,
     tokens: Vec<codegen::Token>
 }
 
 ///A single template.
 pub struct Template<'a> {
     fragments: ExtensibleMap<'a, &'static str, Box<Fragment + 'a>>,
-    parameters: HashMap<String, ContentType>,
+    parameters: HashMap<StrTendril, ContentType>,
     tokens: Vec<codegen::Token>,
-    scopes: Vec<Option<(String, String, Option<ContentType>, Option<String>)>>,
+    scopes: Vec<Option<(StrTendril, StrTendril, Option<ContentType>, Option<StrTendril>)>>,
     errors: Vec<Cow<'static, str>>
 }
 
@@ -185,7 +188,7 @@ impl<'a> Template<'a> {
     pub fn parse_string(&mut self, source: String) -> Result<(), Error> {
         {
             let mut tokenizer = Tokenizer::new(&mut*self, Default::default());
-            tokenizer.feed(source);
+            tokenizer.feed(source.into());
         }
 
         if self.errors.len() > 0 {
@@ -218,7 +221,7 @@ impl<'a> Template<'a> {
         self.tokens.push(Token::BeginTag(name));
 
         for attribute in attributes {
-            let mut content = try!(parser::parse_content(&attribute.value, &self.fragments)).into_iter();
+            let mut content = try!(parser::parse_content(attribute.value, &self.fragments)).into_iter();
             match content.next() {
                 Some(ReturnType::String(text)) => self.tokens.push(Token::BeginAttribute(attribute.name.local, Content::String(text))),
                 Some(ReturnType::Placeholder(name, ty)) => {
@@ -227,16 +230,16 @@ impl<'a> Template<'a> {
                 },
                 Some(ReturnType::Logic(_)) => return Err(Cow::Borrowed("logic can not be used as text")),
                 Some(ReturnType::Scope(scope)) => {
-                    self.tokens.push(Token::BeginAttribute(attribute.name.local, Content::String("".into())));
+                    self.tokens.push(Token::BeginAttribute(attribute.name.local, Content::String(StrTendril::new())));
                     try!(self.reg_scope_vars(&scope));
                     self.tokens.push(Token::Scope(scope));
                 },
                 Some(ReturnType::End) => {
                     try!(self.end_scope());
                     self.tokens.push(Token::End);
-                    self.tokens.push(Token::BeginAttribute(attribute.name.local, Content::String("".into())));
+                    self.tokens.push(Token::BeginAttribute(attribute.name.local, Content::String(StrTendril::new())));
                 },
-                None => self.tokens.push(Token::BeginAttribute(attribute.name.local, Content::String(String::new())))
+                None => self.tokens.push(Token::BeginAttribute(attribute.name.local, Content::String(StrTendril::new())))
             }
 
             for part in content {
@@ -266,8 +269,8 @@ impl<'a> Template<'a> {
         Ok(())
     }
 
-    fn add_text(&mut self, text: String) -> Result<(), Cow<'static, str>> {
-        let mut content = try!(parser::parse_content(&text, &self.fragments)).into_iter();
+    fn add_text(&mut self, text: StrTendril) -> Result<(), Cow<'static, str>> {
+        let mut content = try!(parser::parse_content(text, &self.fragments)).into_iter();
         match content.next() {
             Some(ReturnType::String(text)) => self.tokens.push(Token::Text(Content::String(text))),
             Some(ReturnType::Placeholder(name, ty)) => {
@@ -315,7 +318,7 @@ impl<'a> Template<'a> {
     fn reg_scope_vars(&mut self, scope: &Scope) -> Result<(), Cow<'static, str>> {
         match scope {
             &Scope::If(ref logic) => for p in logic.placeholders() {
-                try!(self.reg_placeholder(p.to_owned(), ContentType::Bool));
+                try!(self.reg_placeholder(p.clone(), ContentType::Bool));
                 self.scopes.push(None);
             },
             &Scope::ForEach(ref collection, ref element, ref opt_key) => {
@@ -327,16 +330,20 @@ impl<'a> Template<'a> {
         Ok(())
     }
 
-    fn reg_placeholder(&mut self, param: String, pref_ty: ContentType) -> Result<(), Cow<'static, str>> {
+    fn reg_placeholder(&mut self, param: StrTendril, pref_ty: ContentType) -> Result<(), Cow<'static, str>> {
+        println!("registering placeholder '{}', with {} scopes", param, self.scopes.len());
         for scope in self.scopes.iter_mut().rev() {
             if let &mut Some((ref _origin, ref element, ref mut ty, ref opt_key)) = scope {
                 if element == &param {
-                    match ty {
+                    match &mut *ty {
                         &mut Some(ref mut ty) => try!(ty.combine_with(pref_ty)),
                         ty => *ty = Some(pref_ty)
                     }
 
+                    println!("type of '{}' seems to be {:?}", element, ty);
                     return Ok(())
+                } else {
+                    println!("'{}' did not match '{}'", param, element);
                 }
 
                 if let &Some(ref key) = opt_key {
