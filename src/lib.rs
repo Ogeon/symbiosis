@@ -36,7 +36,7 @@ mod parser;
 pub enum Error {
     Io(io::Error),
     Format(fmt::Error),
-    Parse(Vec<Cow<'static, str>>)
+    Parse(Vec<parser::Error>)
 }
 
 impl From<io::Error> for Error {
@@ -57,13 +57,9 @@ impl fmt::Display for Error {
             &Error::Io(ref e) => e.fmt(f),
             &Error::Format(ref e) => e.fmt(f),
             &Error::Parse(ref e) => {
-                try!(write!(f, "parse errors: "));
-                for (i, error) in e.iter().enumerate() {
-                    if i == 0 {
-                        try!(error.fmt(f));
-                    } else {
-                        try!(write!(f, ", {}", error));
-                    }
+                try!(write!(f, "parse errors:\n"));
+                for error in e.iter() {
+                    try!(write!(f, " - {}\n", error));
                 }
                 Ok(())
             }
@@ -159,7 +155,7 @@ pub struct Template<'a> {
     parameters: HashMap<StrTendril, ContentType>,
     tokens: Vec<codegen::Token>,
     scopes: Vec<Option<(StrTendril, StrTendril, Option<ContentType>, Option<StrTendril>)>>,
-    errors: Vec<Cow<'static, str>>
+    errors: Vec<parser::Error>
 }
 
 impl<'a> Template<'a> {
@@ -216,7 +212,7 @@ impl<'a> Template<'a> {
         self.tokens.push(Token::SetDoctype(doctype));
     }
 
-    fn open_tag(&mut self, name: Atom, attributes: Vec<Attribute>, self_closing: bool) -> Result<(), Cow<'static, str>> {
+    fn open_tag(&mut self, name: Atom, attributes: Vec<Attribute>, self_closing: bool) -> Result<(), parser::Error> {
         let void = is_void(name.as_slice());
         self.tokens.push(Token::BeginTag(name));
 
@@ -228,7 +224,7 @@ impl<'a> Template<'a> {
                     try!(self.reg_placeholder(name.clone(), ty));
                     self.tokens.push(Token::BeginAttribute(attribute.name.local, Content::Placeholder(name)));
                 },
-                Some(ReturnType::Logic(_)) => return Err(Cow::Borrowed("logic can not be used as text")),
+                Some(ReturnType::Logic(_)) => return Err("logic can not be used as text".into()),
                 Some(ReturnType::Scope(scope)) => {
                     self.tokens.push(Token::BeginAttribute(attribute.name.local, Content::String(StrTendril::new())));
                     try!(self.reg_scope_vars(&scope));
@@ -249,7 +245,7 @@ impl<'a> Template<'a> {
                         try!(self.reg_placeholder(name.clone(), ty));
                         self.tokens.push(Token::AppendToAttribute(Content::Placeholder(name)));
                     },
-                    ReturnType::Logic(_) => return Err(Cow::Borrowed("logic can not be used as text")),
+                    ReturnType::Logic(_) => return Err("logic can not be used as text".into()),
                     ReturnType::Scope(scope) => {
                         try!(self.reg_scope_vars(&scope));
                         self.tokens.push(Token::Scope(scope));
@@ -269,7 +265,7 @@ impl<'a> Template<'a> {
         Ok(())
     }
 
-    fn add_text(&mut self, text: StrTendril) -> Result<(), Cow<'static, str>> {
+    fn add_text(&mut self, text: StrTendril) -> Result<(), parser::Error> {
         let mut content = try!(parser::parse_content(text, &self.fragments)).into_iter();
         match content.next() {
             Some(ReturnType::String(text)) => self.tokens.push(Token::Text(Content::String(text))),
@@ -277,7 +273,7 @@ impl<'a> Template<'a> {
                 try!(self.reg_placeholder(name.clone(), ty));
                 self.tokens.push(Token::Text(Content::Placeholder(name)));
             },
-            Some(ReturnType::Logic(_)) => return Err(Cow::Borrowed("logic can not be used as text")),
+            Some(ReturnType::Logic(_)) => return Err("logic can not be used as text".into()),
             Some(ReturnType::Scope(scope)) => {
                 try!(self.reg_scope_vars(&scope));
                 self.tokens.push(Token::Scope(scope));
@@ -296,7 +292,7 @@ impl<'a> Template<'a> {
                     try!(self.reg_placeholder(name.clone(), ty));
                     self.tokens.push(Token::Text(Content::Placeholder(name)));
                 },
-                ReturnType::Logic(_) => return Err(Cow::Borrowed("logic can not be used as text")),
+                ReturnType::Logic(_) => return Err("logic can not be used as text".into()),
                 ReturnType::Scope(scope) => {
                     try!(self.reg_scope_vars(&scope));
                     self.tokens.push(Token::Scope(scope));
@@ -382,7 +378,7 @@ impl<'a, 'b: 'a> TokenSink for &'a mut Template<'b> {
                 attrs,
                 self_closing
             }) => if let Err(e) = self.open_tag(name, attrs, self_closing) {
-                self.errors.push(e);
+                self.errors.push(e.into());
             },
             HtmlToken::TagToken(Tag {
                 kind: TagKind::EndTag,
@@ -390,7 +386,7 @@ impl<'a, 'b: 'a> TokenSink for &'a mut Template<'b> {
                 ..
             }) => self.close_tag(name),
             HtmlToken::CharacterTokens(text) => if let Err(e) = self.add_text(text) {
-                self.errors.push(e);
+                self.errors.push(e.into());
             },
             HtmlToken::DoctypeToken(doctype) => self.set_doctype(doctype),
 
@@ -398,7 +394,7 @@ impl<'a, 'b: 'a> TokenSink for &'a mut Template<'b> {
             HtmlToken::NullCharacterToken => {},
             HtmlToken::EOFToken => {},
 
-            HtmlToken::ParseError(e) => self.errors.push(e)
+            HtmlToken::ParseError(e) => self.errors.push(e.into())
         }
     }
 }

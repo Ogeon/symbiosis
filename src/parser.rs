@@ -2,11 +2,39 @@ use std::collections::HashMap;
 use std::borrow::{Cow, Borrow};
 use std::hash::Hash;
 use std::cmp::min;
+use std::fmt;
 
 use tendril::StrTendril;
 
-use fragment::{Fragment, InputType, ReturnType};
+use fragment::{self, Fragment, InputType, ReturnType};
 use codegen::ContentType;
+
+#[derive(Debug)]
+pub enum Error {
+    Fragment(fragment::Error),
+    Other(Cow<'static, str>)
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Error::Fragment(ref e) => write!(f, "during fragment expansion: {}", e),
+            Error::Other(ref e) => write!(f, "while parsing: {}", e)
+        }
+    }
+}
+
+impl From<fragment::Error> for Error {
+    fn from(error: fragment::Error) -> Error {
+        Error::Fragment(error)
+    }
+}
+
+impl<T: Into<Cow<'static, str>>> From<T> for Error {
+    fn from(error: T) -> Error {
+        Error::Other(error.into())
+    }
+}
 
 pub enum ExtensibleMap<'a, K: 'a, V: 'a> {
     Owned(HashMap<K, V>),
@@ -36,7 +64,7 @@ impl<'a, K: Hash + Eq, V> ExtensibleMap<'a, K, V> {
     }
 }
 
-pub fn parse_content(content: StrTendril, fragments: &ExtensibleMap<&'static str, Box<Fragment>>) -> Result<Vec<ReturnType>, Cow<'static, str>> {
+pub fn parse_content(content: StrTendril, fragments: &ExtensibleMap<&'static str, Box<Fragment>>) -> Result<Vec<ReturnType>, Error> {
     let mut tokens = Vec::new();
     let mut content = Slicer::new(content);
 
@@ -72,21 +100,25 @@ pub fn parse_content(content: StrTendril, fragments: &ExtensibleMap<&'static str
     Ok(tokens)
 }
 
-fn parse_fragment(content: &mut Slicer, fragments: &ExtensibleMap<&'static str, Box<Fragment>>) -> Result<ReturnType, Cow<'static, str>> {
+fn parse_fragment(content: &mut Slicer, fragments: &ExtensibleMap<&'static str, Box<Fragment>>) -> Result<ReturnType, fragment::Error> {
     content.skip_whitespace();
     if let Some(name) = content.take_while(|c| c == b'_' || (c as char).is_alphabetic()) {
         content.skip_whitespace();
         if content.eat(b'(') {
             if let Some(fragment) = fragments.get(&*name) {
                 let pattern = fragment.pattern();
-                let args = try!(pattern.parse(content, |src, inner| inner_fragment(src, inner, fragments)));
-
-                content.skip_whitespace();
-                match content.next_char() {
-                    Some(')') => fragment.process(args),
-                    Some(c) => Err(format!("expected ')', but found {}", c).into()),
-                    None => Err("expected ')'".into())
-                }
+                pattern.parse(content, |src, inner| inner_fragment(src, inner, fragments))
+                    .and_then(|args| {
+                        content.skip_whitespace();
+                        match content.next_char() {
+                            Some(')') => fragment.process(args),
+                            Some(c) => Err(format!("expected ')', but found {}", c).into()),
+                            None => Err("expected ')'".into())
+                        }
+                    }).map_err(|mut e| {
+                        e.add_callee(fragment.identifier());
+                        e
+                    })
             } else {
                 Err(format!("'{}' is not a registered fragment", name).into())
             }
@@ -95,7 +127,7 @@ fn parse_fragment(content: &mut Slicer, fragments: &ExtensibleMap<&'static str, 
         } else if name.len() > 0 {
             Ok(ReturnType::Placeholder(name, ContentType::String(false)))
         } else {
-            Err(Cow::Borrowed("empty fragment"))
+            Err("empty fragment".into())
         }
     } else {
         if let Some(c) = content.next_char() {
@@ -106,16 +138,20 @@ fn parse_fragment(content: &mut Slicer, fragments: &ExtensibleMap<&'static str, 
     }
 }
 
-fn inner_fragment(content: &mut Slicer, name: StrTendril, fragments: &ExtensibleMap<&'static str, Box<Fragment>>) -> Result<InputType, Cow<'static, str>> {
+fn inner_fragment(content: &mut Slicer, name: StrTendril, fragments: &ExtensibleMap<&'static str, Box<Fragment>>) -> Result<InputType, fragment::Error> {
     if let Some(fragment) = fragments.get(&*name) {
         let pattern = fragment.pattern();
-        let args = try!(pattern.parse(content, |src, inner| inner_fragment(src, inner, fragments)));
-
-        match try!(fragment.process(args)) {
-            ReturnType::Placeholder(name, ty) => Ok(InputType::Placeholder(name, ty)),
-            ReturnType::Logic(cond) => Ok(InputType::Logic(cond)),
-            _ => return Err("inner fragments must only return placeholders and logic".into())
-        }
+        pattern.parse(content, |src, inner| inner_fragment(src, inner, fragments))
+            .and_then(|args| {
+                match try!(fragment.process(args)) {
+                    ReturnType::Placeholder(name, ty) => Ok(InputType::Placeholder(name, ty)),
+                    ReturnType::Logic(cond) => Ok(InputType::Logic(cond)),
+                    _ => return Err("inner fragments must only return placeholders and logic".into())
+                }
+            }).map_err(|mut e| {
+                e.add_callee(fragment.identifier());
+                e
+            })
     } else {
         Err(format!("'{}' is not a registered fragment", name).into())
     }

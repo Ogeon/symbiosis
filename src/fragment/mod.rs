@@ -26,7 +26,7 @@ macro_rules! impl_fragment {
             }
 
             fn process(&self, args: Vec<$crate::fragment::pattern::Argument>)
-            -> Result<$crate::fragment::ReturnType, ::std::borrow::Cow<'static, str>> {
+            -> Result<$crate::fragment::ReturnType, $crate::fragment::Error> {
                 let $args: Vec<InputType> = args.into_iter()
                     .nth(0)
                     .map(|a| match a.into_repeat() {
@@ -59,7 +59,7 @@ macro_rules! impl_fragment {
             }
 
             fn process(&self, args: Vec<$crate::fragment::pattern::Argument>)
-            -> Result<$crate::fragment::ReturnType, ::std::borrow::Cow<'static, str>>{
+            -> Result<$crate::fragment::ReturnType, $crate::fragment::Error>{
                 pattern_decoder!($arg_t { $($pattern)* });
                 let $args = try!($arg_t::decode(args));
                 $process
@@ -80,8 +80,113 @@ macro_rules! impl_fragment {
             }
 
             fn process(&self, $args: Vec<$crate::fragment::pattern::Argument>)
-            -> Result<$crate::fragment::ReturnType, ::std::borrow::Cow<'static, str>>
+            -> Result<$crate::fragment::ReturnType, $crate::fragment::Error>
             $process
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Error {
+    callstack: Vec<Cow<'static, str>>,
+    kind: ErrorKind
+}
+
+impl Error {
+    pub fn expected_input(but_found: Option<pattern::Argument>) -> Error {
+        Error {
+            callstack: vec![],
+            kind: ErrorKind::UnexpectedArgument(ArgumentKind::Input, but_found)
+        }
+    }
+
+    pub fn expected_optional(but_found: Option<pattern::Argument>) -> Error {
+        Error {
+            callstack: vec![],
+            kind: ErrorKind::UnexpectedArgument(ArgumentKind::Optional, but_found)
+        }
+    }
+    
+    pub fn expected_repeating(but_found: Option<pattern::Argument>) -> Error {
+        Error {
+            callstack: vec![],
+            kind: ErrorKind::UnexpectedArgument(ArgumentKind::Repeated, but_found)
+        }
+    }
+
+    pub fn unexpected_input_type(expected: InputType, but_found: InputType) -> Error {
+        Error {
+            callstack: vec![],
+            kind: ErrorKind::UnexpectedInputType(expected, but_found)
+        }
+    }
+
+    pub fn other(error: Cow<'static, str>) -> Error {
+        Error {
+            callstack: vec![],
+            kind: ErrorKind::Other(error)
+        }
+    }
+
+    pub fn add_callee<T: Into<Cow<'static, str>>>(&mut self, callee: T) {
+        self.callstack.push(callee.into())
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self.callstack.len() > 0 {
+            try!(f.write_str("error when calling "));
+            for (i, fragment) in self.callstack.iter().enumerate() {
+                if i > 0 {
+                    try!(f.write_str(" in "));
+                }
+                try!(f.write_str(fragment));
+            }
+            try!(f.write_str(": "));
+        }
+
+        self.kind.fmt(f)
+    }
+}
+
+impl<T: Into<Cow<'static, str>>> From<T> for Error {
+    fn from(error: T) -> Error {
+        Error::other(error.into())
+    }
+}
+
+#[derive(Debug)]
+enum ArgumentKind {
+    Input,
+    Optional,
+    Repeated
+}
+
+impl fmt::Display for ArgumentKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            ArgumentKind::Input => f.write_str("input"),
+            ArgumentKind::Optional => f.write_str("an optional pattern"),
+            ArgumentKind::Repeated => f.write_str("a repeated pattern")
+        }
+    }
+}
+
+#[derive(Debug)]
+enum ErrorKind {
+    UnexpectedArgument(ArgumentKind, Option<pattern::Argument>),
+    UnexpectedInputType(InputType, InputType),
+    Other(Cow<'static, str>)
+}
+
+impl fmt::Display for ErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            ErrorKind::UnexpectedArgument(ref expected, Some(ref arg)) => write!(f, "expected {}, but found {:?}", expected, arg),
+            ErrorKind::UnexpectedArgument(ref expected, None) => write!(f, "expected {}, but found nothing more", expected),
+            ErrorKind::UnexpectedInputType(ref expected, ref found) => write!(f, "expected {:?}, but found {:?}", expected, found),
+            ErrorKind::Other(ref e) => e.fmt(f)
         }
     }
 }
@@ -89,10 +194,10 @@ macro_rules! impl_fragment {
 pub trait Fragment {
     fn identifier(&self) -> &'static str;
     fn pattern(&self) -> pattern::Pattern;
-    fn process(&self, args: Vec<pattern::Argument>) -> Result<ReturnType, Cow<'static, str>>;
+    fn process(&self, args: Vec<pattern::Argument>) -> Result<ReturnType, Error>;
 }
 
-impl<F: Fn(Vec<pattern::Argument>) -> Result<ReturnType, Cow<'static, str>>> Fragment for (&'static str, F) {
+impl<F: Fn(Vec<pattern::Argument>) -> Result<ReturnType, Error>> Fragment for (&'static str, F) {
     fn identifier(&self) -> &'static str {
         self.0
     }
@@ -101,7 +206,7 @@ impl<F: Fn(Vec<pattern::Argument>) -> Result<ReturnType, Cow<'static, str>>> Fra
         build_pattern!([input](","))
     }
 
-    fn process(&self, args: Vec<pattern::Argument>) -> Result<ReturnType, Cow<'static, str>> {
+    fn process(&self, args: Vec<pattern::Argument>) -> Result<ReturnType, Error> {
         self.1(args)
     }
 }
@@ -115,7 +220,7 @@ impl<'a, F: Fragment> Fragment for &'a F {
         (*self).pattern()
     }
 
-    fn process(&self, args: Vec<pattern::Argument>) -> Result<ReturnType, Cow<'static, str>> {
+    fn process(&self, args: Vec<pattern::Argument>) -> Result<ReturnType, Error> {
         (*self).process(args)
     }
 }
@@ -145,8 +250,8 @@ pub enum InputType {
 impl fmt::Debug for InputType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            InputType::Placeholder(ref name, ref ty) => write!(f, "{}: {}", name, ty),
-            InputType::Logic(_) => "a logic expression".fmt(f)
+            InputType::Placeholder(ref name, ref ty) => write!(f, "placeholder '{}' ({})", name, ty),
+            InputType::Logic(_) => f.write_str("a logic expression")
         }
     }
 }
@@ -166,7 +271,7 @@ impl_fragment!{
     #[doc = "```"]
     frag "if" => If: |args: [input, 1]| {
         if args.len() == 0 {
-            return Err(Cow::Borrowed("if requires at least one argument"));
+            return Err("if requires at least one argument".into());
         }
 
         let mut conds = Vec::with_capacity(args.len());
@@ -189,7 +294,7 @@ impl_fragment!{
     #[doc = "conditions `a, b, ...` are true."]
     frag "and" => And: |args: [input, 1]| {
         if args.len() == 0 {
-            return Err(Cow::Borrowed("and requires at least one argument"));
+            return Err("and requires at least one argument".into());
         }
 
         let mut conds = Vec::with_capacity(args.len());
@@ -212,7 +317,7 @@ impl_fragment!{
     #[doc = "`a, b, ...` is true."]
     frag "or" => Or: |args: [input, 1]| {
         if args.len() == 0 {
-            return Err(Cow::Borrowed("or requires at least one argument"));
+            return Err("or requires at least one argument".into());
         }
 
         let mut conds = Vec::with_capacity(args.len());
@@ -232,12 +337,9 @@ impl_fragment!{
     #[doc = "`not` logic fragment."]
     #[doc = ""]
     #[doc = "`not(a)` will be true if condition `a` is false."]
-    frag "not" => Not: |args: [input, 1]| {
-        if args.len() != 1 {
-            return Err(Cow::Borrowed("not will only accept one argument"));
-        }
-
-        let cond = match args.into_iter().next().unwrap() {
+    pattern (NotArgs { cond: input })
+    frag "not" => Not: |args| {
+        let cond = match args.cond {
             InputType::Placeholder(name, _) => Logic::Value(name),
             InputType::Logic(cond) => cond
         };
@@ -248,14 +350,11 @@ impl_fragment!{
 
 impl_fragment!{
     #[doc = "`template(a)` tells the parser that the placeholder `a` is an other template."]
-    frag "template" => Template: |args: [input, 1]| {
-        if args.len() != 1 {
-            return Err(Cow::Borrowed("template will only accept one argument"));
-        }
-
-        match args.into_iter().next().unwrap() {
+    pattern (TemplateArgs { template: input })
+    frag "template" => Template: |args| {
+        match args.template {
             InputType::Placeholder(name, _) => Ok(ReturnType::Placeholder(name, ContentType::Template(false))),
-            InputType::Logic(_) => Err(Cow::Borrowed("template expected a placeholder, but found a logic expression"))
+            e => return Err(Error::unexpected_input_type(InputType::Placeholder("template".into(), ContentType::Template(false)), e))
         }
     }
 }
@@ -276,12 +375,12 @@ impl_fragment!{
             (None, element, collection) => {
                 let element = match element {
                     InputType::Placeholder(name, _) => name,
-                    InputType::Logic(_) => return Err(Cow::Borrowed("foreach expected a placeholder as `element`, but found a logic expression"))
+                    e => return Err(Error::unexpected_input_type(InputType::Placeholder("element".into(), ContentType::String(false)), e))
                 };
 
                 let collection = match collection {
                     InputType::Placeholder(name, _) => name,
-                    InputType::Logic(_) => return Err(Cow::Borrowed("foreach expected a placeholder as `collection`, but found a logic expression"))
+                    e => return Err(Error::unexpected_input_type(InputType::Placeholder("collection".into(), ContentType::Collection(None, false)), e))
                 };
 
                 Ok(ReturnType::Scope(Scope::ForEach(collection, element, None)))
@@ -289,17 +388,17 @@ impl_fragment!{
             (Some(Key{ k: key }), element, collection) => {
                 let key = match key {
                     InputType::Placeholder(name, _) => name,
-                    InputType::Logic(_) => return Err(Cow::Borrowed("foreach expected a placeholder as `key`, but found a logic expression"))
+                    e => return Err(Error::unexpected_input_type(InputType::Placeholder("key".into(), ContentType::String(false)), e))
                 };
 
                 let element = match element {
                     InputType::Placeholder(name, _) => name,
-                    InputType::Logic(_) => return Err(Cow::Borrowed("foreach expected a placeholder as `element`, but found a logic expression"))
+                    e => return Err(Error::unexpected_input_type(InputType::Placeholder("element".into(), ContentType::String(false)), e))
                 };
 
                 let collection = match collection {
                     InputType::Placeholder(name, _) => name,
-                    InputType::Logic(_) => return Err(Cow::Borrowed("foreach expected a placeholder as `collection`, but found a logic expression"))
+                    e => return Err(Error::unexpected_input_type(InputType::Placeholder("collection".into(), ContentType::Collection(None, false)), e))
                 };
 
                 Ok(ReturnType::Scope(Scope::ForEach(collection, element, Some(key))))

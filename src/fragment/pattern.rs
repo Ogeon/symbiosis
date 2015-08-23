@@ -3,7 +3,7 @@ use std::fmt;
 
 use tendril::StrTendril;
 
-use fragment::InputType;
+use fragment::{InputType, Error};
 use codegen::ContentType;
 use parser::Slicer;
 
@@ -165,7 +165,7 @@ macro_rules! __symbiosis_build_annotated_pattern_internal {
 ///# #[macro_use] extern crate symbiosis;
 ///# use std::borrow::Cow;
 ///# fn main() {}
-///# fn ex() -> Result<(), Cow<'static, str>> {
+///# fn ex() -> Result<(), symbiosis::fragment::Error> {
 ///# let args = Vec::new();
 ///pattern_decoder!(ForEach {
 ///    key: (Key { key: input {"=>"} })?
@@ -192,7 +192,7 @@ macro_rules! __symbiosis_build_annotated_pattern_internal {
 ///# #[macro_use] extern crate symbiosis;
 ///# use std::borrow::Cow;
 ///# fn main() {}
-///# fn ex() -> Result<(), Cow<'static, str>> {
+///# fn ex() -> Result<(), symbiosis::fragment::Error> {
 ///# let args = Vec::new();
 ///pattern_decoder!(HeadTail {
 ///    head: input
@@ -233,7 +233,7 @@ macro_rules! __symbiosis_build_pattern_types_internal {
                 $new_field: match $input.next() {
                     Some(arg) => try!(
                         arg.into_optional()
-                            .map_err::<::std::borrow::Cow<'static, str>, _>(|e| format!("expected an optional pattern, but found {:?}", e).into())
+                            .map_err(|e| $crate::fragment::Error::expected_optional(Some(e)))
                             .and_then::<Option<$new_type>, _>(|p| if let Some(p) = p {
                                 let r = try!($new_type::decode(p));
                                 Ok(Some(r))
@@ -241,7 +241,7 @@ macro_rules! __symbiosis_build_pattern_types_internal {
                                 Ok(None)
                             })
                     ),
-                    None => return Err("expected an optional pattern, but nothing more was found".into())
+                    None => return Err($crate::fragment::Error::expected_optional(None))
                 };
             }
             [ $($definitions)* ]
@@ -257,7 +257,7 @@ macro_rules! __symbiosis_build_pattern_types_internal {
                 $new_field: match $input.next() {
                     Some(arg) => try!(
                         arg.into_repeat()
-                            .map_err::<::std::borrow::Cow<'static, str>, _>(|e| format!("expected a repeating pattern, but found {:?}", e).into())
+                            .map_err(|e| $crate::fragment::Error::expected_repeating(Some(e)))
                             .and_then(|v| {
                                 let mut res = Vec::with_capacity(v.len());
                                 for p in v {
@@ -266,7 +266,7 @@ macro_rules! __symbiosis_build_pattern_types_internal {
                                 Ok(res)
                             })
                     ),
-                    None => return Err("expected a repeating pattern, but nothing more was found".into())
+                    None => return Err($crate::fragment::Error::expected_repeating(None))
                 };
             }
             [ $($definitions)* ]
@@ -280,9 +280,9 @@ macro_rules! __symbiosis_build_pattern_types_internal {
                 $($read_field: $read_expr;)*
                 $new_field: match $input.next() {
                     Some(arg) => try!(
-                        arg.into_input().map_err::<::std::borrow::Cow<'static, str>, _>(|e| format!("expected an input, but found {:?}", e).into())
+                        arg.into_input().map_err(|e| $crate::fragment::Error::expected_input(Some(e)))
                     ),
-                    None => return Err("expected an input, but nothing more was found".into())
+                    None => return Err($crate::fragment::Error::expected_input(None))
                 }; 
             }
             [ $($definitions)* ]
@@ -292,7 +292,7 @@ macro_rules! __symbiosis_build_pattern_types_internal {
     ($input: ident $name: ident {$($field: ident : $ty: ty),*} {$($read_field: ident: $read_expr: expr;)*} [ $($definitions: tt)* ]) => (
         struct $name {$($field: $ty),*}
         impl $name {
-            fn decode(args: Vec<$crate::fragment::pattern::Argument>) -> Result<$name, ::std::borrow::Cow<'static, str>> {
+            fn decode(args: Vec<$crate::fragment::pattern::Argument>) -> Result<$name, $crate::fragment::Error> {
                 let mut $input = args.into_iter();
                 $(let $read_field =  $read_expr;)*
                 Ok($name {
@@ -320,11 +320,11 @@ impl Pattern {
     }
 
     #[doc(hidden)]
-    pub fn parse<F>(&self, src: &mut Slicer, mut get_input: F) -> Result<Vec<Argument>, Cow<'static, str>> where F: FnMut(&mut Slicer, StrTendril) -> Result<InputType, Cow<'static, str>> {
+    pub fn parse<F>(&self, src: &mut Slicer, mut get_input: F) -> Result<Vec<Argument>, Error> where F: FnMut(&mut Slicer, StrTendril) -> Result<InputType, Error> {
         self.parse_using(src, &mut get_input)
     }
 
-    fn parse_using<F>(&self, src: &mut Slicer, get_input: &mut F) -> Result<Vec<Argument>, Cow<'static, str>> where F: FnMut(&mut Slicer, StrTendril) -> Result<InputType, Cow<'static, str>> {
+    fn parse_using<F>(&self, src: &mut Slicer, get_input: &mut F) -> Result<Vec<Argument>, Error> where F: FnMut(&mut Slicer, StrTendril) -> Result<InputType, Error> {
         let mut result = Vec::new();
         let mut optionals = Vec::new();
 
@@ -382,13 +382,16 @@ impl Pattern {
                             src.skip_whitespace();
 
                             if src.eat(b'(') {
-                                get_input(src, ident).and_then(|r| {
+                                get_input(src, ident.clone()).and_then(|r| {
                                     src.skip_whitespace();
                                     match src.next_char() {
                                         Some(')') => Ok(Argument::Input(r)),
                                         Some(c) => Err(format!("expected ')', but found {}", c).into()),
                                         None => Err("expected ')'".into())
                                     }
+                                }).map_err(|mut e| {
+                                    e.add_callee(ident.to_string());
+                                    e
                                 })
                             } else {
                                 Ok(Argument::Input(InputType::Placeholder(ident, ContentType::String(false))))
