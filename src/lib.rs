@@ -21,13 +21,13 @@ use string_cache::atom::Atom;
 use tendril::StrTendril;
 
 use codegen::{Token, Content, Codegen, ContentType, Scope};
-use fragments::{Fragment, ReturnType};
+use fragment::{Fragment, ReturnType};
 
 use parser::ExtensibleMap;
 
 #[macro_use]
 pub mod codegen;
-pub mod fragments;
+pub mod fragment;
 pub mod javascript;
 pub mod rust;
 mod parser;
@@ -331,7 +331,6 @@ impl<'a> Template<'a> {
     }
 
     fn reg_placeholder(&mut self, param: StrTendril, pref_ty: ContentType) -> Result<(), Cow<'static, str>> {
-        println!("registering placeholder '{}', with {} scopes", param, self.scopes.len());
         for scope in self.scopes.iter_mut().rev() {
             if let &mut Some((ref _origin, ref element, ref mut ty, ref opt_key)) = scope {
                 if element == &param {
@@ -339,11 +338,7 @@ impl<'a> Template<'a> {
                         &mut Some(ref mut ty) => try!(ty.combine_with(pref_ty)),
                         ty => *ty = Some(pref_ty)
                     }
-
-                    println!("type of '{}' seems to be {:?}", element, ty);
                     return Ok(())
-                } else {
-                    println!("'{}' did not match '{}'", param, element);
                 }
 
                 if let &Some(ref key) = opt_key {
@@ -433,22 +428,22 @@ fn is_void(tag: &str) -> bool {
 fn init_fragments<'a>() -> HashMap<&'static str, Box<Fragment + 'a>> {
     let mut map = HashMap::new();
 
-    let f: Box<Fragment + 'a> = Box::new(fragments::If);
+    let f: Box<Fragment + 'a> = Box::new(fragment::If);
     map.insert(f.identifier(), f);
 
-    let f = fragments::And;
+    let f = fragment::And;
     map.insert(f.identifier(), Box::new(f));
 
-    let f = fragments::Or;
+    let f = fragment::Or;
     map.insert(f.identifier(), Box::new(f));
 
-    let f = fragments::Not;
+    let f = fragment::Not;
     map.insert(f.identifier(), Box::new(f));
 
-    let f = fragments::Template;
+    let f = fragment::Template;
     map.insert(f.identifier(), Box::new(f));
 
-    let f = fragments::ForEach;
+    let f = fragment::ForEach;
     map.insert(f.identifier(), Box::new(f));
 
     map

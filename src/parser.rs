@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::borrow::{Cow, Borrow};
 use std::hash::Hash;
+use std::cmp::min;
 
 use tendril::StrTendril;
 
-use fragments::{Fragment, InputType, ReturnType};
+use fragment::{Fragment, InputType, ReturnType};
 use codegen::ContentType;
 
 pub enum ExtensibleMap<'a, K: 'a, V: 'a> {
@@ -72,128 +73,55 @@ pub fn parse_content(content: StrTendril, fragments: &ExtensibleMap<&'static str
 }
 
 fn parse_fragment(content: &mut Slicer, fragments: &ExtensibleMap<&'static str, Box<Fragment>>) -> Result<ReturnType, Cow<'static, str>> {
-    let mut name = StrTendril::new();
-    let mut found_fragment = None;
-    while let Some(character) = content.next() {
-        match character {
-            b'(' => {
-                name.push_tendril(&content.slice_excluding(1));
+    content.skip_whitespace();
+    if let Some(name) = content.take_while(|c| c == b'_' || (c as char).is_alphabetic()) {
+        content.skip_whitespace();
+        if content.eat(b'(') {
+            if let Some(fragment) = fragments.get(&*name) {
+                let pattern = fragment.pattern();
+                let args = try!(pattern.parse(content, |src, inner| inner_fragment(src, inner, fragments)));
 
-                let args = try!(parse_sub_fragments(content, fragments));
-                if let Some(fragment) = fragments.get(&*name) {
-                    found_fragment = Some(fragment.process(args));
-                    name.clear();
-                } else {
-                    return Err(Cow::Owned(format!("'{}' is not a registered fragment", name)));
+                content.skip_whitespace();
+                match content.next_char() {
+                    Some(')') => fragment.process(args),
+                    Some(c) => Err(format!("expected ')', but found {}", c).into()),
+                    None => Err("expected ')'".into())
                 }
-            },
-            b'}' => match content.next() {
-                Some(b'}') => {
-                    name.push_tendril(&content.slice_excluding(2));
-                    break
-                },
-                None => {
-                    name.push_tendril(&content.slice_excluding(1));
-                    break
-                },
-                _ => {}
-            },
-            b'\\' => match content.next() {
-                Some(b'}') | Some(b'(') => {
-                    content.go_back();
-                    name.push_tendril(&content.slice_excluding(1));
-                    content.next();
-                }
-                _ => {}
-            },
-            c if (c as char).is_whitespace() => { //Should be error?
-                if content.slice_len() > 1 {
-                    name.push_tendril(&content.slice_excluding(1));
-                } else {
-                    content.discard();
-                }
-            },
-            _ => {}
+            } else {
+                Err(format!("'{}' is not a registered fragment", name).into())
+            }
+        } else if &*name == "end" {
+            Ok(ReturnType::End)
+        } else if name.len() > 0 {
+            Ok(ReturnType::Placeholder(name, ContentType::String(false)))
+        } else {
+            Err(Cow::Borrowed("empty fragment"))
         }
-    }
-
-    if content.slice_len() > 0 {
-        name.push_tendril(&content.slice());
-    }
-
-    if let Some(result) = found_fragment {
-        result
-    } else if &*name == "end" {
-        Ok(ReturnType::End)
-    } else if name.len() > 0 {
-        Ok(ReturnType::Placeholder(name, ContentType::String(false)))
     } else {
-        Err(Cow::Borrowed("empty fragment"))
-    }
-}
-
-fn parse_sub_fragments(content: &mut Slicer, fragments: &ExtensibleMap<&'static str, Box<Fragment>>) -> Result<Vec<InputType>, Cow<'static, str>> {
-    let mut name = StrTendril::new();
-    let mut result = vec![];
-    while let Some(character) = content.next() {
-        match character {
-            b'(' => {
-                name.push_tendril(&content.slice_excluding(1));
-
-                let args = try!(parse_sub_fragments(content, fragments));
-                if let Some(fragment) = fragments.get(&*name) {
-                    result.push(match try!(fragment.process(args)) {
-                        ReturnType::Placeholder(name, ty) => InputType::Placeholder(name, ty),
-                        ReturnType::Logic(cond) => InputType::Logic(cond),
-                        _ => return Err(Cow::Borrowed("inner fragments must only return placeholders and logic"))
-                    });
-                } else {
-                    return Err(Cow::Owned(format!("'{}' is not a registered fragment", name)));
-                }
-                name.clear();
-            },
-            b',' => {
-                name.push_tendril(&content.slice_excluding(1));
-                println!("pushing parameter '{}'", name);
-                result.push(InputType::Placeholder(name.clone(), ContentType::String(false)));
-                name.clear();
-            },
-            b')' => {
-                name.push_tendril(&content.slice_excluding(1));
-                break
-            },
-            b'\\' => match content.next() {
-                Some(b')') | Some(b'(') => {
-                    content.go_back();
-                    name.push_tendril(&content.slice_excluding(1));
-                    content.next();
-                },
-                _ => {}
-            },
-            c if (c as char).is_whitespace() => { //Should be error if not after ","?
-                if content.slice_len() > 1 {
-                    name.push_tendril(&content.slice_excluding(1));
-                } else {
-                    content.discard();
-                }
-                println!("found whitespace! name: '{}'", name);
-            },
-            _ => {println!("'{}' ({})", name, name.len32());}
+        if let Some(c) = content.next_char() {
+            Err(format!("expected an identifier, but found {}", c).into())
+        } else {
+            Err("expected an identifier".into())
         }
     }
-
-    if content.slice_len() > 0 {
-        name.push_tendril(&content.slice());
-    }
-
-    if name.len() > 0 {
-        result.push(InputType::Placeholder(name, ContentType::String(false)))
-    }
-
-    Ok(result)
 }
 
-struct Slicer {
+fn inner_fragment(content: &mut Slicer, name: StrTendril, fragments: &ExtensibleMap<&'static str, Box<Fragment>>) -> Result<InputType, Cow<'static, str>> {
+    if let Some(fragment) = fragments.get(&*name) {
+        let pattern = fragment.pattern();
+        let args = try!(pattern.parse(content, |src, inner| inner_fragment(src, inner, fragments)));
+
+        match try!(fragment.process(args)) {
+            ReturnType::Placeholder(name, ty) => Ok(InputType::Placeholder(name, ty)),
+            ReturnType::Logic(cond) => Ok(InputType::Logic(cond)),
+            _ => return Err("inner fragments must only return placeholders and logic".into())
+        }
+    } else {
+        Err(format!("'{}' is not a registered fragment", name).into())
+    }
+}
+
+pub struct Slicer {
     src: StrTendril,
     offset: u32,
     length: u32
@@ -247,6 +175,16 @@ impl Slicer {
         }
     }
 
+    pub fn next_char(&mut self) -> Option<char> {
+        let i = (self.offset + self.length) as usize;
+        if let Some(c) = self.src[i..].chars().next() {
+            self.length += c.len_utf8() as u32;
+            Some(c)
+        } else {
+            None
+        }
+    }
+
     pub fn go_back(&mut self) {
         if self.length > 0 {
             self.length -= 1;
@@ -255,5 +193,70 @@ impl Slicer {
 
     pub fn slice_len(&self) -> u32 {
         self.length
+    }
+
+    pub fn offset(&self) -> u32 {
+        self.offset
+    }
+
+    pub fn jump_to(&mut self, offset: u32) {
+        self.offset = min(offset, self.src.len32());
+        self.length = 0;
+    }
+
+    pub fn skip_whitespace(&mut self) {
+        while let Some(c) = self.next() {
+            if !(c as char).is_whitespace() {
+                self.go_back();
+                self.discard();
+                break;
+            }
+        }
+    }
+
+    pub fn take_while<F: FnMut(u8) -> bool>(&mut self, mut pred: F) -> Option<StrTendril> {
+        while let Some(c) = self.next() {
+            if !pred(c) {
+                self.go_back();
+                return Some(self.slice());
+            }
+        }
+
+        None
+    }
+
+    pub fn eat(&mut self, byte: u8) -> bool {
+        match self.next() {
+            Some(c) if c == byte => {
+                self.discard();
+                true
+            },
+            Some(_) => {
+                self.go_back();
+                false
+            },
+            None => false
+        }
+    }
+
+    pub fn eat_bytes(&mut self, bytes: &[u8]) -> bool {
+        let snapshot = self.length;
+
+        for &byte in bytes {
+            match self.next() {
+                Some(c) => if c != byte {
+                    self.length = snapshot;
+                    return false;
+                },
+                None => {
+                    self.length = snapshot;
+                    return false;
+                }
+            }
+        }
+
+        self.discard();
+        
+        true
     }
 }

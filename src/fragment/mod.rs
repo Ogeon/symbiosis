@@ -1,21 +1,86 @@
 use std::borrow::Cow;
+use std::fmt;
 
 use tendril::StrTendril;
 
 use codegen::{Scope, Logic, ContentType};
 
+#[macro_use]
+pub mod pattern;
+
 macro_rules! impl_fragment {
     ($(#[$attr:meta])* frag $str_name:expr => $name:ident: |$args:ident| $process:block) => {
+        impl_fragment!($(#[$attr])* frag $str_name => $name: |$args: [input, 0]| $process);
+    };
+    ($(#[$attr:meta])* frag $str_name:expr => $name:ident: |$args:ident: [input, $at_least: expr]| $process:block) => {
         $(#[$attr])*
         pub struct $name;
 
-        impl $crate::fragments::Fragment for $name {
+        impl $crate::fragment::Fragment for $name {
             fn identifier(&self) -> &'static str {
                 $str_name
             }
 
-            fn process(&self, $args: Vec<$crate::fragments::InputType>)
-            -> Result<$crate::fragments::ReturnType, ::std::borrow::Cow<'static, str>>
+            fn pattern(&self) -> $crate::fragment::pattern::Pattern {
+                build_pattern!([input](",", $at_least))
+            }
+
+            fn process(&self, args: Vec<$crate::fragment::pattern::Argument>)
+            -> Result<$crate::fragment::ReturnType, ::std::borrow::Cow<'static, str>> {
+                let $args: Vec<InputType> = args.into_iter()
+                    .nth(0)
+                    .map(|a| match a.into_repeat() {
+                        Ok(i) => i,
+                        Err(e) => panic!("expected input, but found {:?}", e)
+                    })
+                    .expect("expected repeated input, but found nothing")
+                    .into_iter()
+                    .map(|a| a.into_iter().nth(0).expect("found empty patterns where input was expected"))
+                    .map(|a| match a.into_input() {
+                        Ok(i) => i,
+                        Err(e) => panic!("expected input, but found {:?}", e)
+                    })
+                    .collect();
+                $process
+            }
+        }
+    };
+    ($(#[$attr:meta])* pattern ($arg_t: ident { $($pattern: tt)* }) frag $str_name:expr => $name:ident: |$args:ident| $process:block) => {
+        $(#[$attr])*
+        pub struct $name;
+
+        impl $crate::fragment::Fragment for $name {
+            fn identifier(&self) -> &'static str {
+                $str_name
+            }
+
+            fn pattern(&self) -> $crate::fragment::pattern::Pattern {
+                build_annotated_pattern!($arg_t { $($pattern)* })
+            }
+
+            fn process(&self, args: Vec<$crate::fragment::pattern::Argument>)
+            -> Result<$crate::fragment::ReturnType, ::std::borrow::Cow<'static, str>>{
+                pattern_decoder!($arg_t { $($pattern)* });
+                let $args = try!($arg_t::decode(args));
+                $process
+            }
+        }
+    };
+    ($(#[$attr:meta])* pattern ($($pattern: tt)*) frag $str_name:expr => $name:ident: |$args:ident| $process:block) => {
+        $(#[$attr])*
+        pub struct $name;
+
+        impl $crate::fragment::Fragment for $name {
+            fn identifier(&self) -> &'static str {
+                $str_name
+            }
+
+            fn pattern(&self) -> $crate::fragment::pattern::Pattern {
+                build_pattern!($($pattern)*)
+            }
+
+            fn process(&self, $args: Vec<$crate::fragment::pattern::Argument>)
+            -> Result<$crate::fragment::ReturnType, ::std::borrow::Cow<'static, str>>
             $process
         }
     }
@@ -23,15 +88,20 @@ macro_rules! impl_fragment {
 
 pub trait Fragment {
     fn identifier(&self) -> &'static str;
-    fn process(&self, args: Vec<InputType>) -> Result<ReturnType, Cow<'static, str>>;
+    fn pattern(&self) -> pattern::Pattern;
+    fn process(&self, args: Vec<pattern::Argument>) -> Result<ReturnType, Cow<'static, str>>;
 }
 
-impl<F: Fn(Vec<InputType>) -> Result<ReturnType, Cow<'static, str>>> Fragment for (&'static str, F) {
+impl<F: Fn(Vec<pattern::Argument>) -> Result<ReturnType, Cow<'static, str>>> Fragment for (&'static str, F) {
     fn identifier(&self) -> &'static str {
         self.0
     }
 
-    fn process(&self, args: Vec<InputType>) -> Result<ReturnType, Cow<'static, str>> {
+    fn pattern(&self) -> pattern::Pattern {
+        build_pattern!([input](","))
+    }
+
+    fn process(&self, args: Vec<pattern::Argument>) -> Result<ReturnType, Cow<'static, str>> {
         self.1(args)
     }
 }
@@ -41,7 +111,11 @@ impl<'a, F: Fragment> Fragment for &'a F {
         (*self).identifier()
     }
 
-    fn process(&self, args: Vec<InputType>) -> Result<ReturnType, Cow<'static, str>> {
+    fn pattern(&self) -> pattern::Pattern {
+        (*self).pattern()
+    }
+
+    fn process(&self, args: Vec<pattern::Argument>) -> Result<ReturnType, Cow<'static, str>> {
         (*self).process(args)
     }
 }
@@ -68,6 +142,15 @@ pub enum InputType {
     Logic(Logic)
 }
 
+impl fmt::Debug for InputType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            InputType::Placeholder(ref name, ref ty) => write!(f, "{}: {}", name, ty),
+            InputType::Logic(_) => "a logic expression".fmt(f)
+        }
+    }
+}
+
 
 impl_fragment!{
     #[doc = "Start of an `if` scope."]
@@ -81,7 +164,7 @@ impl_fragment!{
     #[doc = "{{ if(name, age) }}<p>My name is {{ name }} and I am {{ age }} years old.</p>{{ end }}"]
     #[doc = "{{ if(am_a_teapot) }}<p>I am a teapot</p>{{ end }}"]
     #[doc = "```"]
-    frag "if" => If: |args| {
+    frag "if" => If: |args: [input, 1]| {
         if args.len() == 0 {
             return Err(Cow::Borrowed("if requires at least one argument"));
         }
@@ -104,7 +187,7 @@ impl_fragment!{
     #[doc = ""]
     #[doc = "`and(a, b, ...)` will only be true if all of the"]
     #[doc = "conditions `a, b, ...` are true."]
-    frag "and" => And: |args| {
+    frag "and" => And: |args: [input, 1]| {
         if args.len() == 0 {
             return Err(Cow::Borrowed("and requires at least one argument"));
         }
@@ -127,7 +210,7 @@ impl_fragment!{
     #[doc = ""]
     #[doc = "`or(a, b, ...)` will be true if one of the conditions"]
     #[doc = "`a, b, ...` is true."]
-    frag "or" => Or: |args| {
+    frag "or" => Or: |args: [input, 1]| {
         if args.len() == 0 {
             return Err(Cow::Borrowed("or requires at least one argument"));
         }
@@ -149,7 +232,7 @@ impl_fragment!{
     #[doc = "`not` logic fragment."]
     #[doc = ""]
     #[doc = "`not(a)` will be true if condition `a` is false."]
-    frag "not" => Not: |args| {
+    frag "not" => Not: |args: [input, 1]| {
         if args.len() != 1 {
             return Err(Cow::Borrowed("not will only accept one argument"));
         }
@@ -165,7 +248,7 @@ impl_fragment!{
 
 impl_fragment!{
     #[doc = "`template(a)` tells the parser that the placeholder `a` is an other template."]
-    frag "template" => Template: |args| {
+    frag "template" => Template: |args: [input, 1]| {
         if args.len() != 1 {
             return Err(Cow::Borrowed("template will only accept one argument"));
         }
@@ -180,14 +263,17 @@ impl_fragment!{
 impl_fragment!{
     #[doc = "Start of a `foreach` scope."]
     #[doc = ""]
-    #[doc = "`foreach(element, collection)` or `foreach(key, element, collection)` will repeat"]
+    #[doc = "`foreach(element in collection)` or `foreach(key => element in collection)` will repeat"]
     #[doc = "everything within the scope for each `element` (and `key`) in `collection`."]
+    pattern (ForEachArgs {
+        key: (Key { k: input {"=>"} })?
+        element: input
+        {"in"}
+        collection: input
+    })
     frag "foreach" => ForEach: |args| {
-        let mut args = args.into_iter();
-        let args = (args.next(), args.next(), args.next());
-        
-        match args {
-            (Some(element), Some(collection), None) => {
+        match (args.key, args.element, args.collection) {
+            (None, element, collection) => {
                 let element = match element {
                     InputType::Placeholder(name, _) => name,
                     InputType::Logic(_) => return Err(Cow::Borrowed("foreach expected a placeholder as `element`, but found a logic expression"))
@@ -200,7 +286,7 @@ impl_fragment!{
 
                 Ok(ReturnType::Scope(Scope::ForEach(collection, element, None)))
             },
-            (Some(key), Some(element), Some(collection)) => {
+            (Some(Key{ k: key }), element, collection) => {
                 let key = match key {
                     InputType::Placeholder(name, _) => name,
                     InputType::Logic(_) => return Err(Cow::Borrowed("foreach expected a placeholder as `key`, but found a logic expression"))
@@ -217,8 +303,7 @@ impl_fragment!{
                 };
 
                 Ok(ReturnType::Scope(Scope::ForEach(collection, element, Some(key))))
-            },
-            _ => Err(Cow::Borrowed("foreach will only accept two or three argumens"))
+            }
         }
     }
 }
