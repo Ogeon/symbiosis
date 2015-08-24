@@ -79,6 +79,15 @@ pub fn parse_content(content: StrTendril, fragments: &ExtensibleMap<&'static str
                     }
 
                     tokens.push(try!(parse_fragment(&mut content, fragments)));
+
+                    content.skip_whitespace();
+                    if !content.eat_bytes(b"}}") {
+                        if let Some(c) = content.next_char() {
+                            return Err(format!("expected '}}}}', but found '{}'", c).into());
+                        } else {
+                            return Err("expected '}}', but found nothing".into());
+                        }
+                    }
                 },
                 None => break,
                 _ => {}
