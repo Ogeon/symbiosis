@@ -179,14 +179,14 @@ impl<'a> Codegen for Rust<'a> {
         }
 
         if params.len() > 0 {
-            try_w!(w, "impl<'a> ::symbiosis_rust::Template for {}<'a> {{", name);
+            try_w!(w, "impl<'a> ::std::fmt::Display for {}<'a> {{", name);
         } else {
-            try_w!(w, "impl ::symbiosis_rust::Template for {} {{", name);
+            try_w!(w, "impl ::std::fmt::Display for {} {{", name);
         }
 
         w.indent();
 
-        try_w!(w, "fn render_to(&self, writer: &mut ::std::io::Write) -> ::std::io::Result<()> {{");
+        try_w!(w, "fn fmt(&self, writer: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {{");
 
         {
             let mut func = w.block();
@@ -460,7 +460,7 @@ fn write_ty<W: Write>(w: &mut Line<W>, ty: &ContentType) -> Result<(), Error> {
         &ContentType::Bool => try_w!(w, "bool"),
         &ContentType::Template(_) => try_w!(w, "&'a ::symbiosis_rust::Template"),
         &ContentType::Collection(Some(ref inner), _) => {
-            try_w!(w, "&'a ::symbiosis_rust::Collection<'a, ");
+            try_w!(w, "::symbiosis_rust::Collection<'a, ");
             try!(write_ty(w, inner));
             try_w!(w, ">");
         },
