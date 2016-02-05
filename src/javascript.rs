@@ -148,7 +148,6 @@ impl<'a> Codegen for JavaScript<'a> {
                     &ContentType::String(false) => try_w!(block, "this.{} = \"\";", parameter),
                     &ContentType::String(true) => try_w!(block, "this.{} = null;", parameter),
                     &ContentType::Bool => try_w!(block, "this.{} = false;", parameter),
-                    &ContentType::Template(_) => try_w!(block, "this.{} = null;", parameter),
                     &ContentType::Collection(_, false) => try_w!(block, "this.{} = [];", parameter),
                     &ContentType::Collection(_, true) => try_w!(block, "this.{} = null;", parameter)
                 }
@@ -528,7 +527,7 @@ fn write_attribute<'a, W: Write>(
                     }
                     try_w!(w, "}}");
                 },
-                Some((_, Some(&ContentType::Template(_)))) | Some((_, Some(&ContentType::Collection(_, _)))) => {
+                Some((_, Some(&ContentType::Collection(_, _)))) => {
                     return Err(Error::CannotBeAttribute(placeholder.into()));
                 },
                 None => return Err(Error::UndefinedPlaceholder(placeholder.into()))
@@ -544,7 +543,7 @@ fn write_text<'a, W: Write>(
     var: &str,
     state: &mut TextState,
     content: &Content,
-    parent: &str,
+    _parent: &str,
     params: &'a HashMap<StrTendril, ContentType>,
     scopes: &[Option<(&'a str, String, &'a ContentType, Option<(StrTendril, String)>)>]
 ) -> Result<(), Error> {
@@ -569,7 +568,7 @@ fn write_text<'a, W: Write>(
                     try_w!(w, "}}");
                     *state = TextState::HasContent;
                 },
-                Some((alias, Some(&ContentType::Template(_)))) => {
+                /*Some((alias, Some(&ContentType::Template(_)))) => {
                     try!(append_text(w, var, state, parent));
                     match alias {
                         Some(alias) => {
@@ -597,7 +596,7 @@ fn write_text<'a, W: Write>(
                         try_w!(line, ".render_to({});", parent);
                     }
                     try_w!(w, "}}");
-                },
+                },*/
                 Some((_, Some(&ContentType::Collection(_, _)))) => {
                     return Err(Error::CannotBeText(placeholder.into()));
                 },

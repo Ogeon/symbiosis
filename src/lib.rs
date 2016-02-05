@@ -437,9 +437,6 @@ fn init_fragments<'a>() -> HashMap<&'static str, Box<Fragment + 'a>> {
     let f = fragment::Not;
     map.insert(f.identifier(), Box::new(f));
 
-    let f = fragment::Template;
-    map.insert(f.identifier(), Box::new(f));
-
     let f = fragment::ForEach;
     map.insert(f.identifier(), Box::new(f));
 

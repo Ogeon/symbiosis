@@ -90,26 +90,21 @@ impl_content!(int i8, i16, i32, i64, isize);
 impl_content!(uint u8, u16, u32, u64, usize);
 impl_content!(float f32, f64);
 
-///Common trait for Symbiosis templates.
-pub trait Template {
-    fn render_to(&self, writer: &mut fmt::Write) -> fmt::Result;
-}
-
 ///A sequence of templates for lazy conversion from collection item to template.
-pub struct Templates<'a, I: 'a + ?Sized, F> where
+pub struct Generator<'a, I: 'a + ?Sized, F> where
     &'a I: IntoIterator
 {
     content: &'a I,
     as_template: F
 }
 
-impl <'a, I: 'a + ?Sized, F, T> Templates<'a, I, F> where
+impl <'a, I: 'a + ?Sized, F, T> Generator<'a, I, F> where
     &'a I: IntoIterator,
     F: Fn(<&'a I as IntoIterator>::Item) -> T,
-    T: Template
+    T: fmt::Display
 {
-    pub fn new(content: &'a I, as_template: F) -> Templates<'a, I, F> {
-        Templates {
+    pub fn new(content: &'a I, as_template: F) -> Generator<'a, I, F> {
+        Generator {
             content: content,
             as_template: as_template
         }
@@ -117,14 +112,14 @@ impl <'a, I: 'a + ?Sized, F, T> Templates<'a, I, F> where
 }
 
 
-impl<'a, I: 'a + ?Sized, F, T> Template for Templates<'a, I, F> where
+impl<'a, I: 'a + ?Sized, F, T> fmt::Display for Generator<'a, I, F> where
     &'a I: IntoIterator,
     F: Fn(<&'a I as IntoIterator>::Item) -> T,
-    T: Template
+    T: fmt::Display
 {
-    fn render_to(&self, writer: &mut fmt::Write) -> fmt::Result {
+    fn fmt(&self, writer: &mut fmt::Formatter) -> fmt::Result {
         for post in self.content {
-            try!((self.as_template)(post).render_to(writer))
+            try!((self.as_template)(post).fmt(writer))
         }
 
         Ok(())
@@ -204,5 +199,14 @@ impl<'a, T> From<Vec<T>> for Collection<'a, T> {
 impl<'a, T> From<BTreeMap<String, T>> for Collection<'a, T> {
     fn from(map: BTreeMap<String, T>) -> Collection<'a, T> {
         Collection::Map(map)
+    }
+}
+
+impl<'a, K, V, T> From<&'a BTreeMap<K, V>> for Collection<'a, T> where
+    K: fmt::Display,
+    V: Into<T> + Clone,
+{
+    fn from(map: &'a BTreeMap<K, V>) -> Collection<'a, T> {
+        Collection::Map(map.iter().map(|(k, v)| (k.to_string(), v.clone().into())).collect())
     }
 }

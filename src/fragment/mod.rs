@@ -349,17 +349,6 @@ impl_fragment!{
 }
 
 impl_fragment!{
-    #[doc = "`template(a)` tells the parser that the placeholder `a` is an other template."]
-    pattern (TemplateArgs { template: input })
-    frag "template" => Template: |args| {
-        match args.template {
-            InputType::Placeholder(name, _) => Ok(ReturnType::Placeholder(name, ContentType::Template(false))),
-            e => return Err(Error::unexpected_input_type(InputType::Placeholder("template".into(), ContentType::Template(false)), e))
-        }
-    }
-}
-
-impl_fragment!{
     #[doc = "Start of a `foreach` scope."]
     #[doc = ""]
     #[doc = "`foreach(element in collection)` or `foreach(key => element in collection)` will repeat"]

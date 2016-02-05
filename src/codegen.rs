@@ -120,8 +120,6 @@ pub enum ContentType {
     String(bool),
     ///A boolean value.
     Bool,
-    ///An other (maybe optional) template.
-    Template(bool),
     ///A (maybe optional) collection of hopefully inferred content, associated with a key.
     Collection(Option<Box<ContentType>>, bool)
 }
@@ -135,7 +133,6 @@ impl ContentType {
                 *this = other;
             },
             (&mut ContentType::String(ref mut a_o), ContentType::String(ref mut b_o)) => *a_o = *a_o | *b_o,
-            (&mut ContentType::Template(ref mut a_o), ContentType::Template(ref mut b_o)) => *a_o = *a_o | *b_o,
             (&mut ContentType::Collection(ref mut a, ref mut a_o), ContentType::Collection(ref mut b, ref mut b_o)) => {
                 *a_o = *a_o | *b_o;
                 match (a, b.take()) {
@@ -154,7 +151,6 @@ impl ContentType {
         match self {
             &ContentType::String(optional) => optional,
             &ContentType::Bool => false,
-            &ContentType::Template(optional) => optional,
             &ContentType::Collection(_, optional) => optional,
         }
     }
@@ -163,7 +159,6 @@ impl ContentType {
         match self {
             &mut ContentType::String(ref mut o) => *o = optional,
             &mut ContentType::Bool => {},
-            &mut ContentType::Template(ref mut o) => *o = optional,
             &mut ContentType::Collection(_, ref mut o) => *o = optional,
         }
     }
@@ -178,7 +173,6 @@ impl fmt::Display for ContentType {
         match self {
             &ContentType::String(_) => "string".fmt(f),
             &ContentType::Bool => "boolean value".fmt(f),
-            &ContentType::Template(_) => "template".fmt(f),
             &ContentType::Collection(Some(ref a), _) => write!(f, "collection of {}", a),
             &ContentType::Collection(None, _) => "collection of something".fmt(f),
         }

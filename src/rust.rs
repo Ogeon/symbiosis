@@ -108,8 +108,8 @@ impl<'a> Rust<'a> {
             },
             &Logic::Value(ref val) => {
                 match params.get(val) {
-                    Some(&ContentType::String(false)) | Some(&ContentType::Template(false)) | Some(&ContentType::Collection(_, false)) => try_w!(w, "true"),
-                    Some(&ContentType::String(true)) | Some(&ContentType::Template(true)) | Some(&ContentType::Collection(_, true)) => try_w!(w, "self.{}.is_some()", val),
+                    Some(&ContentType::String(false)) | Some(&ContentType::Collection(_, false)) => try_w!(w, "true"),
+                    Some(&ContentType::String(true)) | Some(&ContentType::Collection(_, true)) => try_w!(w, "self.{}.is_some()", val),
                     Some(&ContentType::Bool) => try_w!(w, "self.{}", val),
                     None => {}
                 }
@@ -238,29 +238,6 @@ impl<'a> Codegen for Rust<'a> {
                                     try_w!(func.indented_line(), "try!(write!(writer, \"{{}}\", val));");
                                     try_w!(func, "}}");
                                 },
-                                Some((param_ty, Some(&ContentType::Template(false)))) => {
-                                    try_w_s!(string_buf, " {}=\\\"", name);
-                                    try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
-
-                                    if let ParamTy::Param = param_ty {
-                                        try_w!(func, "try!(self.{}.render_to(writer));", placeholder);
-                                    } else {
-                                        try_w!(func, "try!({}.render_to(writer));", placeholder);
-                                    }
-                                },
-                                Some((param_ty, Some(&ContentType::Template(true)))) => {
-                                    try_w_s!(string_buf, " {}=\\\"", name);
-                                    try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
-
-                                    if let ParamTy::Param = param_ty {
-                                        try_w!(func, "if let Some(template) = self.{} {{", placeholder);
-                                    } else {
-                                        try_w!(func, "if let Some(template) = {} {{", placeholder);
-                                    }
-
-                                    try_w!(func.indented_line(), "try!(template.render_to(writer));");
-                                    try_w!(func, "}}");
-                                },
                                 Some((_, Some(_ty))) => return Err(Error::CannotBeRendered(placeholder.into())),
                                 None => return Err(Error::UndefinedPlaceholder(placeholder.into()))
                             }
@@ -288,27 +265,6 @@ impl<'a> Codegen for Rust<'a> {
                                     }
 
                                     try_w!(func.indented_line(), "try!(write!(writer, \"{{}}\", val));");
-                                    try_w!(func, "}}");
-                                },
-                                Some((param_ty, Some(&ContentType::Template(false)))) => {
-                                    try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
-
-                                    if let ParamTy::Param = param_ty {
-                                        try_w!(func, "try!(self.{}.render_to(writer));", placeholder);
-                                    } else {
-                                        try_w!(func, "try!({}.render_to(writer));", placeholder);
-                                    }
-                                },
-                                Some((param_ty, Some(&ContentType::Template(true)))) => {
-                                    try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
-
-                                    if let ParamTy::Param = param_ty {
-                                        try_w!(func, "if let Some(template) = self.{} {{", placeholder);
-                                    } else {
-                                        try_w!(func, "if let Some(template) = {} {{", placeholder);
-                                    }
-
-                                    try_w!(func.indented_line(), "try!(template.render_to(writer));");
                                     try_w!(func, "}}");
                                 },
                                 Some((_, Some(_ty))) => return Err(Error::CannotBeRendered(placeholder.into())),
@@ -458,7 +414,6 @@ fn write_ty<W: Write>(w: &mut Line<W>, ty: &ContentType) -> Result<(), Error> {
     match ty {
         &ContentType::String(_) => try_w!(w, "::symbiosis_rust::Content<'a>"),
         &ContentType::Bool => try_w!(w, "bool"),
-        &ContentType::Template(_) => try_w!(w, "&'a ::symbiosis_rust::Template"),
         &ContentType::Collection(Some(ref inner), _) => {
             try_w!(w, "::symbiosis_rust::Collection<'a, ");
             try!(write_ty(w, inner));
