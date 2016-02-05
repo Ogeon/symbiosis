@@ -1,4 +1,5 @@
 extern crate html5ever;
+#[macro_use]
 extern crate string_cache;
 extern crate tendril;
 
@@ -68,13 +69,13 @@ impl fmt::Display for Error {
 }
 
 ///A collection of templates.
-pub struct TemplateGroup<'a> {
+pub struct TemplateGroup {
     templates: Vec<ParsedTemplate>,
-    fragments: HashMap<&'static str, Box<Fragment + 'a>>
+    fragments: HashMap<&'static str, Box<Fragment>>
 }
 
-impl<'a> TemplateGroup<'a> {
-    pub fn new() -> TemplateGroup<'a> {
+impl TemplateGroup {
+    pub fn new() -> TemplateGroup {
         TemplateGroup {
             templates: vec![],
             fragments: init_fragments()
@@ -126,7 +127,7 @@ impl<'a> TemplateGroup<'a> {
     }
 
     ///Register a custom fragment.
-    pub fn register_fragment<F: Fragment + 'a>(&mut self, fragment: F) {
+    pub fn register_fragment<F: Fragment + 'static>(&mut self, fragment: F) {
         let fragment = Box::new(fragment);
         self.fragments.insert(fragment.identifier(), fragment);
     }
@@ -151,7 +152,7 @@ struct ParsedTemplate {
 
 ///A single template.
 pub struct Template<'a> {
-    fragments: ExtensibleMap<'a, &'static str, Box<Fragment + 'a>>,
+    fragments: ExtensibleMap<'a, &'static str, Box<Fragment>>,
     parameters: HashMap<StrTendril, ContentType>,
     tokens: Vec<codegen::Token>,
     scopes: Vec<Option<(StrTendril, StrTendril, Option<ContentType>, Option<StrTendril>)>>,
@@ -170,7 +171,7 @@ impl<'a> Template<'a> {
         }
     }
 
-    fn extending(fragments: &'a HashMap<&'static str, Box<Fragment + 'a>>) -> Template<'a> {
+    fn extending(fragments: &'a HashMap<&'static str, Box<Fragment>>) -> Template<'a> {
         Template {
             fragments: ExtensibleMap::extend(fragments),
             parameters: HashMap::new(),
@@ -197,7 +198,7 @@ impl<'a> Template<'a> {
     }
 
     ///Register a custom fragment.
-    pub fn register_fragment<F: Fragment + 'a>(&mut self, fragment: F) {
+    pub fn register_fragment<F: Fragment + 'static>(&mut self, fragment: F) {
         let fragment = Box::new(fragment);
         self.fragments.insert(fragment.identifier(), fragment);
     }
@@ -213,7 +214,7 @@ impl<'a> Template<'a> {
     }
 
     fn open_tag(&mut self, name: Atom, attributes: Vec<Attribute>, self_closing: bool) -> Result<(), parser::Error> {
-        let void = is_void(name.as_slice());
+        let void = is_void(&name);
         self.tokens.push(Token::BeginTag(name));
 
         for attribute in attributes {

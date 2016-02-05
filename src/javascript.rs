@@ -7,8 +7,6 @@ use std::fmt::Write as FmtWrite;
 
 use tendril::StrTendril;
 
-use string_cache::atom::Atom;
-
 use codegen::{Codegen, Writer, Line, Logic, Token, Scope, ContentType, Content};
 
 #[derive(Debug)]
@@ -231,7 +229,7 @@ impl<'a> Codegen for JavaScript<'a> {
 
             let mut tags = vec!["root".to_owned()];
             let mut text: Vec<Option<(String, TextState)>> = vec![None];
-            let mut attribute_var = (Atom::from_slice(""), String::new());
+            let mut attribute_var = (atom!(""), String::new());
             let mut var_counter = 0u32;
             let mut scopes = vec![];
 
@@ -249,9 +247,9 @@ impl<'a> Codegen for JavaScript<'a> {
                             try!(append_text(&mut func, text_var, state, tag));
                         }
 
-                        let var = format!("tag_{}_{}", to_valid_ident(name.as_slice()), var_counter);
+                        let var = format!("tag_{}_{}", to_valid_ident(name), var_counter);
                         var_counter += 1;
-                        try_w!(func, "var {} = document.createElement(\"{}\");", var, name.as_slice());
+                        try_w!(func, "var {} = document.createElement(\"{}\");", var, name);
                         tags.push(var);
                     },
                     &Token::EndTag(self_closing) => if self_closing {
@@ -269,7 +267,7 @@ impl<'a> Codegen for JavaScript<'a> {
                         }
                     },
                     &Token::BeginAttribute(ref name, ref content) => {
-                        attribute_var = (name.clone(), format!("attr_{}_{}", to_valid_ident(name.as_slice()), var_counter));
+                        attribute_var = (name.clone(), format!("attr_{}_{}", to_valid_ident(name), var_counter));
                         var_counter += 1;
                         try!(write_attribute(&mut func, &attribute_var.1, content, true, params, &scopes));
                     },
@@ -278,7 +276,7 @@ impl<'a> Codegen for JavaScript<'a> {
                     },
                     &Token::EndAttribute => {
                         if let Some(tag) = tags.last() {
-                            try_w!(func, "{}.setAttribute(\"{}\", {});", tag, attribute_var.0.as_slice(), attribute_var.1);
+                            try_w!(func, "{}.setAttribute(\"{}\", {});", tag, attribute_var.0, attribute_var.1);
                         }
                     },
                     &Token::Text(ref content) => {

@@ -5,6 +5,6 @@ version = "0.0.1"
 authors = ["Erik Hedvall <hello@erikhedvall.nu>"]
 
 [dependencies]
-html5ever = "0.2"
-string_cache = "0.1"
-tendril = "0.1"
+html5ever = "0.4"
+string_cache = "0.2"
+tendril = "0.2"

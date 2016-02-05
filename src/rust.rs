@@ -210,15 +210,15 @@ impl<'a> Codegen for Rust<'a> {
                         }
                         string_buf.push_str(">");
                     },
-                    &Token::BeginTag(ref name) => try_w_s!(string_buf, "<{}", name.as_slice()),
+                    &Token::BeginTag(ref name) => try_w_s!(string_buf, "<{}", name),
                     &Token::EndTag(_self_close) => string_buf.push_str(">"),
-                    &Token::CloseTag(ref name) => try_w_s!(string_buf, "</{}>", name.as_slice()),
+                    &Token::CloseTag(ref name) => try_w_s!(string_buf, "</{}>", name),
                     &Token::BeginAttribute(ref name, ref content) => match content {
-                        &Content::String(ref content) => try_w_s!(string_buf, " {}=\\\"{}", name.as_slice(), content),
+                        &Content::String(ref content) => try_w_s!(string_buf, " {}=\\\"{}", name, content),
                         &Content::Placeholder(ref placeholder) => {
                             match find_param(placeholder, params, &scopes) {
                                 Some((param_ty, Some(&ContentType::String(false)))) | Some((param_ty, None)) => {
-                                    try_w_s!(string_buf, " {}=\\\"{{}}", name.as_slice());
+                                    try_w_s!(string_buf, " {}=\\\"{{}}", name);
                                     if let ParamTy::Param = param_ty {
                                         fmt_args.push(format!("self.{}", placeholder));
                                     } else {
@@ -226,7 +226,7 @@ impl<'a> Codegen for Rust<'a> {
                                     }
                                 },
                                 Some((param_ty, Some(&ContentType::String(true)))) => {
-                                    try_w_s!(string_buf, " {}=\\\"", name.as_slice());
+                                    try_w_s!(string_buf, " {}=\\\"", name);
                                     try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
 
                                     if let ParamTy::Param = param_ty {
@@ -239,7 +239,7 @@ impl<'a> Codegen for Rust<'a> {
                                     try_w!(func, "}}");
                                 },
                                 Some((param_ty, Some(&ContentType::Template(false)))) => {
-                                    try_w_s!(string_buf, " {}=\\\"", name.as_slice());
+                                    try_w_s!(string_buf, " {}=\\\"", name);
                                     try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
 
                                     if let ParamTy::Param = param_ty {
@@ -249,7 +249,7 @@ impl<'a> Codegen for Rust<'a> {
                                     }
                                 },
                                 Some((param_ty, Some(&ContentType::Template(true)))) => {
-                                    try_w_s!(string_buf, " {}=\\\"", name.as_slice());
+                                    try_w_s!(string_buf, " {}=\\\"", name);
                                     try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
 
                                     if let ParamTy::Param = param_ty {
@@ -427,7 +427,7 @@ fn try_write_and_clear_fmt<W: Write>(w: &mut Writer<W>, buf: &mut String, args: 
         if args.len() == 0 {
             try_w!(w, "try!(write!(writer, \"{}\"));", buf);
         } else {
-            try_w!(w, "try!(write!(writer, \"{}\", {}));", buf, args.connect(", "));
+            try_w!(w, "try!(write!(writer, \"{}\", {}));", buf, args.join(", "));
         }
         buf.clear();
         args.clear();
@@ -441,7 +441,7 @@ fn write_and_clear_fmt<W: Write>(w: &mut Writer<W>, buf: &mut String, args: &mut
         if args.len() == 0 {
             try_w!(w, "write!(writer, \"{}\")", buf);
         } else {
-            try_w!(w, "write!(writer, \"{}\", {})", buf, args.connect(", "));
+            try_w!(w, "write!(writer, \"{}\", {})", buf, args.join(", "));
         }
         buf.clear();
         args.clear();
