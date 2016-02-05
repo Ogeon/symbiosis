@@ -4,19 +4,19 @@ extern crate rand;
 extern crate rustc_serialize;
 
 use std::str::FromStr;
-use std::io::{self, Read};
+use std::io::Read;
 use std::path::Path;
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 use std::cmp::max;
 use std::error::Error;
 
-use symbiosis_rust::{Template, Templates};
+use symbiosis_rust::Generator;
 
 use rustful::{Server, TreeRouter, Context, Response, Handler};
-use rustful::StatusCode::{NotFound, InternalServerError};
+use rustful::StatusCode;
 use rustful::header::ContentType;
-use rustful::file;
+use rustful::file::check_path;
 
 use rand::Rng;
 
@@ -24,6 +24,7 @@ use rustc_serialize::json;
 
 mod templates;
 mod names;
+#[macro_use] mod macros;
 
 fn main() {
     //Our "database" of people
@@ -78,7 +79,7 @@ fn display_page(people: &RwLock<Vec<Person>>, context: Context, response: Respon
     }
 
     let people = people.read().unwrap();
-    let cards = Templates::new(&people[..10], |person| {
+    let cards = Generator::new(&people[..10], |person| {
         templates::Card {
             id: person.id.into(),
             name: (&person.name).into(),
@@ -87,10 +88,7 @@ fn display_page(people: &RwLock<Vec<Person>>, context: Context, response: Respon
         }
     });
 
-    //Use the buffer as a &str in the document template.
-    //This should always work as long as the templates are correct.
-    let mut writer: Vec<u8> = Vec::new();
-    match id {
+    let result = match id {
         Some(id) => {
             //Display info about someone
             let person = &people[id];
@@ -98,48 +96,38 @@ fn display_page(people: &RwLock<Vec<Person>>, context: Context, response: Respon
                 name: (&person.name).into(),
                 age: person.age.into(),
                 supervisor: person.supervisor.as_ref().map(Into::into),
-                projects: &person.projects
+                projects: (&person.projects).into()
             };
             let document = templates::Document {
-                cards: &cards,
-                more_info: Some(&more_info)
+                cards: (&cards).into(),
+                more_info: Some((&more_info).into())
             };
-            document.render_to(&mut writer).ok();
+            document.to_string()
         },
         None => {
             //No additional info was requested
             let document = templates::Document {
-                cards: &cards,
+                cards: (&cards).into(),
                 more_info: None
             };
-            document.render_to(&mut writer).ok();
+            document.to_string()
         }
-    }
+    };
 
-    response.send(writer);
+    response.send(result);
 }
 
 ///Just some resource loading code.
 fn get_resource(_: &RwLock<Vec<Person>>, context: Context, mut response: Response) {
-    let base = Path::new("res");
+    let path = handler_expect!(response, context.variables.get("resource"), StatusCode::Forbidden);
+    handler_try!(response, check_path(&*path), StatusCode::Forbidden);
+    let full_path = Path::new("res").join(&*path);
+    let res = response.send_file(full_path)
+        .or_else(|e| e.send_not_found("Found nothing..."))
+        .or_else(|e| e.ignore_send_error());
 
-    let filename = match context.variables.get("resource") {
-        Some(f) => f,
-        None => {
-            response.set_status(NotFound);
-            return;
-        }
-    };
-    let path = base.join(&*filename);
-    let res = file::Loader::new().send_file(&path, response);
-    if let Err(file::Error::Open(e, mut response)) = res {
-        if let io::ErrorKind::NotFound = e.kind() {
-            response.set_status(NotFound);
-        } else {
-            //Something went horribly wrong
-            context.log.error(&format!("failed to open '{}': {}", path.display(), e.description()));
-            response.set_status(InternalServerError);
-        }
+    if let Err((_e, mut response)) = res {
+        response.set_status(StatusCode::InternalServerError);
     }
 }
 
@@ -162,8 +150,8 @@ fn load_more(people: &RwLock<Vec<Person>>, context: Context, mut response: Respo
     match json::encode(&people_refs) {
         Ok(json) => response.send(json),
         Err(e) => {
-            context.log.error(&format!("failed to encode people list as json: {}", e));
-            response.set_status(InternalServerError);
+            println!("failed to encode people list as json: {}", e);
+            response.set_status(StatusCode::InternalServerError);
         }
     }
 }
@@ -182,8 +170,8 @@ fn load_person(people: &RwLock<Vec<Person>>, context: Context, mut response: Res
     match json::encode(&people.read().unwrap()[id]) {
         Ok(json) => response.send(json),
         Err(e) => {
-            context.log.error(&format!("failed to encode people list as json: {}", e));
-            response.set_status(InternalServerError);
+            println!("failed to encode people list as json: {}", e);
+            response.set_status(StatusCode::InternalServerError);
         }
     }
 }

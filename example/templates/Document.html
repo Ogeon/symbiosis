@@ -8,13 +8,13 @@
 </head>
 <body>
 <div id="cards">
-{{ template(cards) }}
+{{ cards }}
 </div>
 <div>
 	<button onclick="load_more()">Load more...</button>
 </div>
 <div id="more_info_bg" style="{{ if(not(more_info)) }}display: none;{{ end }}" onclick="hide_info(true);">
-	<div id="more_info">{{ if(more_info) }}{{ template(more_info) }}{{ end }}</div>
+	<div id="more_info">{{ if(more_info) }}{{ more_info }}{{ end }}</div>
 </div>
 </body>
 </html>
