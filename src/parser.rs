@@ -111,7 +111,7 @@ pub fn parse_content(content: StrTendril, fragments: &ExtensibleMap<&'static str
 
 fn parse_fragment(content: &mut Slicer, fragments: &ExtensibleMap<&'static str, Box<Fragment>>) -> Result<ReturnType, fragment::Error> {
     content.skip_whitespace();
-    if let Some(name) = content.take_while(|c| c == b'_' || (c as char).is_alphabetic()) {
+    if let Some(name) = content.take_while(|c| c == b'_' ||  c == b'.' || (c as char).is_alphabetic()) {
         content.skip_whitespace();
         if content.eat(b'(') {
             if let Some(fragment) = fragments.get(&*name) {
@@ -134,7 +134,8 @@ fn parse_fragment(content: &mut Slicer, fragments: &ExtensibleMap<&'static str, 
         } else if &*name == "end" {
             Ok(ReturnType::End)
         } else if name.len() > 0 {
-            Ok(ReturnType::Placeholder(name, ContentType::String(false)))
+            let mut path: Vec<_> = name.split('.').map(From::from).collect();
+            Ok(ReturnType::Placeholder(path.into(), ContentType::String(false)))
         } else {
             Err("empty fragment".into())
         }

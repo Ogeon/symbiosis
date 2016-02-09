@@ -7,7 +7,7 @@ use std::fmt::Write as FmtWrite;
 
 use tendril::StrTendril;
 
-use codegen::{Codegen, Writer, Line, Logic, Token, Scope, ContentType, Content};
+use codegen::{Codegen, Writer, Line, Logic, Token, Scope, ContentType, Content, Path, Params};
 
 #[derive(Debug)]
 pub enum Error {
@@ -71,7 +71,7 @@ pub struct JavaScript<'a> {
 }
 
 impl<'a> JavaScript<'a> {
-    fn eval_logic<W: Write>(&self, w: &mut Line<W>, first: bool, cond: &Logic, params: &HashMap<StrTendril, ContentType>) -> Result<(), Error> {
+    fn eval_logic<W: Write>(&self, w: &mut Line<W>, first: bool, cond: &Logic, params: &Params) -> Result<(), Error> {
         match cond {
             &Logic::And(ref conds) => {
                 if !first {
@@ -131,7 +131,7 @@ impl<'a> Codegen for JavaScript<'a> {
         Writer::new(w, "    ")
     }
 
-    fn build_template<W: Write>(&self, w: &mut Writer<W>, name: &str, params: &HashMap<StrTendril, ContentType>, tokens: &[Token]) -> Result<(), Error> {
+    fn build_template<W: Write>(&self, w: &mut Writer<W>, name: &str, params: &Params, tokens: &[Token]) -> Result<(), Error> {
         if let Some(namespace) = self.namespace {
             try_w!(w, "{}.{} = function() {{", namespace, name);
         } else {
@@ -149,7 +149,9 @@ impl<'a> Codegen for JavaScript<'a> {
                     &ContentType::String(true) => try_w!(block, "this.{} = null;", parameter),
                     &ContentType::Bool => try_w!(block, "this.{} = false;", parameter),
                     &ContentType::Collection(_, false) => try_w!(block, "this.{} = [];", parameter),
-                    &ContentType::Collection(_, true) => try_w!(block, "this.{} = null;", parameter)
+                    &ContentType::Collection(_, true) => try_w!(block, "this.{} = null;", parameter),
+                    &ContentType::Struct(_, _, false) => try_w!(block, "this.{} = [];", parameter),
+                    &ContentType::Struct(_, _, true) => try_w!(block, "this.{} = null;", parameter),
                 }
             }
         }
@@ -352,8 +354,8 @@ impl<'a> Codegen for JavaScript<'a> {
                         let (collection_name, ty) = match find_param(collection, params, &scopes) {
                             Some((Some(ref name), Some(&ContentType::Collection(ref ty, _)))) => ((*name).to_owned(), ty),
                             Some((None, Some(&ContentType::Collection(ref ty, _)))) => (format!("this.{}", collection), ty),
-                            Some((_, _)) => return Err(Error::UnexpectedType(collection.into(), ContentType::Collection(None, false))),
-                            None => return Err(Error::UndefinedPlaceholder(collection.into()))
+                            Some((_, _)) => return Err(Error::UnexpectedType(collection.to_string(), ContentType::Collection(None, false))),
+                            None => return Err(Error::UndefinedPlaceholder(collection.to_string()))
                         };
 
                         var_counter += 1;
@@ -373,7 +375,7 @@ impl<'a> Codegen for JavaScript<'a> {
                         if let &Some(ref ty) = ty {
                             scopes.push(Some((element, value, ty, opt_key.clone().map(|k| (k, key)))));
                         } else {
-                            return Err(Error::UnknownType(collection.into()));
+                            return Err(Error::UnknownType(collection.to_string()));
                         }
                     },
                     &Token::End => {
@@ -463,7 +465,9 @@ fn to_valid_ident(name: &str) -> String {
     name.chars().map(|c| if !c.is_alphanumeric() { '_' } else { c }).collect()
 }
 
-fn find_param<'a, 'b>(param: &StrTendril, params: &'a HashMap<StrTendril, ContentType>, scopes: &'b [Option<(&'a str, String, &'a ContentType, Option<(StrTendril, String)>)>]) -> Option<(Option<&'b str>, Option<&'a ContentType>)> {
+fn find_param<'a, 'b>(path: &Path, params: &'a HashMap<StrTendril, ContentType>, scopes: &'b [Option<(&'a str, String, &'a ContentType, Option<(StrTendril, String)>)>]) -> Option<(Option<&'b str>, Option<&'a ContentType>)> {
+    let param = path.first().expect("found empty path");
+
     println!("looking for '{}' in {} scopes", param, scopes.len());
     for scope in scopes.iter().rev() {
         if let &Some((ref name, ref alias, ref ty, ref opt_key)) = scope {
@@ -527,10 +531,10 @@ fn write_attribute<'a, W: Write>(
                     }
                     try_w!(w, "}}");
                 },
-                Some((_, Some(&ContentType::Collection(_, _)))) => {
-                    return Err(Error::CannotBeAttribute(placeholder.into()));
+                Some((_, Some(&ContentType::Collection(_, _)))) | Some((_, Some(&ContentType::Struct(_, _, _)))) => {
+                    return Err(Error::CannotBeAttribute(placeholder.to_string()));
                 },
-                None => return Err(Error::UndefinedPlaceholder(placeholder.into()))
+                None => return Err(Error::UndefinedPlaceholder(placeholder.to_string()))
             }
         }
     }
@@ -597,10 +601,10 @@ fn write_text<'a, W: Write>(
                     }
                     try_w!(w, "}}");
                 },*/
-                Some((_, Some(&ContentType::Collection(_, _)))) => {
-                    return Err(Error::CannotBeText(placeholder.into()));
+                Some((_, Some(&ContentType::Collection(_, _)))) | Some((_, Some(&ContentType::Struct(_, _, _)))) => {
+                    return Err(Error::CannotBeText(placeholder.to_string()));
                 },
-                None => return Err(Error::UndefinedPlaceholder(placeholder.into()))
+                None => return Err(Error::UndefinedPlaceholder(placeholder.to_string()))
             }
         }
     }

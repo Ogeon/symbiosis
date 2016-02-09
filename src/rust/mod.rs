@@ -6,7 +6,9 @@ use std::fmt;
 
 use tendril::StrTendril;
 
-use codegen::{Codegen, Writer, Line, Logic, Token, Scope, ContentType, Content};
+use codegen::{Codegen, Writer, Line, Logic, Token, Scope, ContentType, Content, Path, Params};
+
+mod types;
 
 macro_rules! try_w_s {
     ($w: expr, $fmt: tt, $($arg: expr),*) => (try_w!($w, $fmt, $(Sanitized($arg)),*))
@@ -71,7 +73,7 @@ pub struct Rust<'a> {
 }
 
 impl<'a> Rust<'a> {
-    fn eval_logic<W: Write>(&self, w: &mut Line<W>, first: bool, cond: &Logic, params: &HashMap<StrTendril, ContentType>) -> Result<(), Error> {
+    fn eval_logic<W: Write>(&self, w: &mut Line<W>, first: bool, cond: &Logic, params: &Params) -> Result<(), Error> {
         match cond {
             &Logic::And(ref conds) => {
                 if !first {
@@ -108,8 +110,8 @@ impl<'a> Rust<'a> {
             },
             &Logic::Value(ref val) => {
                 match params.get(val) {
-                    Some(&ContentType::String(false)) | Some(&ContentType::Collection(_, false)) => try_w!(w, "true"),
-                    Some(&ContentType::String(true)) | Some(&ContentType::Collection(_, true)) => try_w!(w, "self.{}.is_some()", val),
+                    Some(&ContentType::String(false)) | Some(&ContentType::Collection(_, false)) | Some(&ContentType::Struct(_, _, false)) => try_w!(w, "true"),
+                    Some(&ContentType::String(true)) | Some(&ContentType::Collection(_, true)) | Some(&ContentType::Struct(_, _, true)) => try_w!(w, "self.{}.is_some()", val),
                     Some(&ContentType::Bool) => try_w!(w, "self.{}", val),
                     None => {}
                 }
@@ -136,7 +138,7 @@ impl<'a> Codegen for Rust<'a> {
         Writer::new(w, "    ")
     }
     
-    fn build_template<W: Write>(&self, w: &mut Writer<W>, name: &str, params: &HashMap<StrTendril, ContentType>, tokens: &[Token]) -> Result<(), Error> {
+    fn build_template<W: Write>(&self, w: &mut Writer<W>, name: &str, params: &Params, tokens: &[Token]) -> Result<(), Error> {
         let public = match (&self.visibility, &self.named_module) {
             (&Visibility::Public, _) => true,
             (_, &Some(_)) => true,
@@ -147,38 +149,9 @@ impl<'a> Codegen for Rust<'a> {
         let mut fmt_args = vec![];
         let mut scopes = vec![];
 
-        if public {
-            if params.len() > 0 {
-                try_w!(w, "pub struct {}<'a> {{", name);
-            } else {
-                try_w!(w, "pub struct {};", name);
-            }
-        } else {
-            if params.len() > 0 {
-                try_w!(w, "struct {}<'a> {{", name);
-            } else {
-                try_w!(w, "struct {};", name);
-            }
-        }
+        let has_lifetime = try!(types::write_structs(w, name, params, public));
 
-        {
-            let mut block = w.block();
-            for (parameter, ty) in params {
-                let mut line = block.begin_line();
-                try_w!(line, "pub {}: ", parameter);
-                match write_ty(&mut line, ty) {
-                    Err(Error::UnknownType(_)) => return Err(Error::UnknownType(parameter.into())),
-                    r => try!(r)
-                }
-                try_w!(line, ",");
-            }
-        }
-        
-        if params.len() > 0 {
-            try_w!(w, "}}");
-        }
-
-        if params.len() > 0 {
+        if has_lifetime {
             try_w!(w, "impl<'a> ::std::fmt::Display for {}<'a> {{", name);
         } else {
             try_w!(w, "impl ::std::fmt::Display for {} {{", name);
@@ -217,29 +190,24 @@ impl<'a> Codegen for Rust<'a> {
                         &Content::String(ref content) => try_w_s!(string_buf, " {}=\\\"{}", name, content),
                         &Content::Placeholder(ref placeholder) => {
                             match find_param(placeholder, params, &scopes) {
-                                Some((param_ty, Some(&ContentType::String(false)))) | Some((param_ty, None)) => {
+                                Some((access_path, Some((&ContentType::String(_), false)))) | Some((access_path, None)) => {
                                     try_w_s!(string_buf, " {}=\\\"{{}}", name);
-                                    if let ParamTy::Param = param_ty {
-                                        fmt_args.push(format!("self.{}", placeholder));
-                                    } else {
-                                        fmt_args.push(placeholder.into());
-                                    }
+                                    fmt_args.push(access_path);
                                 },
-                                Some((param_ty, Some(&ContentType::String(true)))) => {
+                                Some((access_path, Some((&ContentType::String(_), true)))) => {
                                     try_w_s!(string_buf, " {}=\\\"", name);
                                     try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
 
-                                    if let ParamTy::Param = param_ty {
-                                        try_w!(func, "if let Some(ref val) = self.{} {{", placeholder);
-                                    } else {
-                                        try_w!(func, "if let Some(val) = {} {{", placeholder);
-                                    }
+                                    try_w!(func, "if let Some(val) = {} {{", access_path);
 
                                     try_w!(func.indented_line(), "try!(write!(writer, \"{{}}\", val));");
                                     try_w!(func, "}}");
                                 },
-                                Some((_, Some(_ty))) => return Err(Error::CannotBeRendered(placeholder.into())),
-                                None => return Err(Error::UndefinedPlaceholder(placeholder.into()))
+                                Some((_, Some(ty))) => {
+                                    println!("non-text type: {:?}", ty);
+                                    return Err(Error::CannotBeRendered(placeholder.to_string()))
+                                },
+                                None => return Err(Error::UndefinedPlaceholder(placeholder.to_string()))
                             }
                         }
                     },
@@ -247,28 +215,21 @@ impl<'a> Codegen for Rust<'a> {
                         &Content::String(ref content) => try_w_s!(string_buf, "{}", content),
                         &Content::Placeholder(ref placeholder) => {
                             match find_param(placeholder, params, &scopes) {
-                                Some((param_ty, Some(&ContentType::String(false)))) | Some((param_ty, None)) => {
+                                Some((access_path, Some((&ContentType::String(_), false)))) | Some((access_path, None)) => {
                                     string_buf.push_str("{}");
-                                    if let ParamTy::Param = param_ty {
-                                        fmt_args.push(format!("self.{}", placeholder));
-                                    } else {
-                                        fmt_args.push(placeholder.into());
-                                    }
+                                    fmt_args.push(access_path);
                                 },
-                                Some((param_ty, Some(&ContentType::String(true)))) => {
+                                Some((access_path, Some((&ContentType::String(_), true)))) => {
                                     try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
-
-                                    if let ParamTy::Param = param_ty {
-                                        try_w!(func, "if let Some(ref val) = self.{} {{", placeholder);
-                                    } else {
-                                        try_w!(func, "if let Some(val) = {} {{", placeholder);
-                                    }
-
+                                    try_w!(func, "if let Some(val) = {} {{", access_path);
                                     try_w!(func.indented_line(), "try!(write!(writer, \"{{}}\", val));");
                                     try_w!(func, "}}");
                                 },
-                                Some((_, Some(_ty))) => return Err(Error::CannotBeRendered(placeholder.into())),
-                                None => return Err(Error::UndefinedPlaceholder(placeholder.into()))
+                                Some((_, Some(ty))) => {
+                                    println!("non-text type: {:?}", ty);
+                                    return Err(Error::CannotBeRendered(placeholder.to_string()))
+                                },
+                                None => return Err(Error::UndefinedPlaceholder(placeholder.to_string()))
                             }
                         }
                     },
@@ -290,9 +251,9 @@ impl<'a> Codegen for Rust<'a> {
                         try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
 
                         match find_param(collection, params, &scopes) {
-                            Some((param_ty, content_ty)) => {
+                            Some((access_path, content_ty)) => {
                                 match content_ty {
-                                    Some(&ContentType::Collection(ref ty, optional)) => {
+                                    Some((&ContentType::Collection(ref ty, _), optional)) => {
                                         let mut line = func.begin_line();
 
                                         if let &Some(ref key) = opt_key {
@@ -301,11 +262,7 @@ impl<'a> Codegen for Rust<'a> {
                                             try_w!(line, "for {}", element);
                                         }
 
-                                        if let ParamTy::Param = param_ty {
-                                            try_w!(line, " in self.{}", collection);
-                                        } else {
-                                            try_w!(line, " in {}", collection);
-                                        }
+                                        try_w!(line, " in {}", access_path);
 
                                         if optional {
                                             try_w!(line, ".iter().flat_map(|c| c");
@@ -324,16 +281,20 @@ impl<'a> Codegen for Rust<'a> {
                                         }
 
                                         if let &Some(ref ty) = ty {
-                                            scopes.push(Some((element, ty, opt_key.clone())));
+                                            scopes.push(Some(ForEachLevel {
+                                                alias: element.clone(),
+                                                alias_type: ty,
+                                                key: opt_key.clone(),
+                                            }));
                                         } else {
-                                            return Err(Error::UnknownType(collection.into()))
+                                            return Err(Error::UnknownType(collection.to_string()))
                                         }
                                     },
-                                    Some(_ty) => return Err(Error::UnexpectedType(collection.into(), ContentType::Collection(None, false))),
-                                    None => return Err(Error::UnexpectedType(collection.into(), ContentType::Collection(None, false)))
+                                    Some(_ty) => return Err(Error::UnexpectedType(collection.to_string(), ContentType::Collection(None, false))),
+                                    None => return Err(Error::UnexpectedType(collection.to_string(), ContentType::Collection(None, false)))
                                 }
                             },
-                            None => return Err(Error::UndefinedPlaceholder(collection.into())),
+                            None => return Err(Error::UndefinedPlaceholder(collection.to_string())),
                         }
 
                         func.indent();
@@ -406,45 +367,82 @@ fn write_and_clear_fmt<W: Write>(w: &mut Writer<W>, buf: &mut String, args: &mut
     Ok(())
 }
 
-fn write_ty<W: Write>(w: &mut Line<W>, ty: &ContentType) -> Result<(), Error> {
-    if ty.is_optional() {
-        try_w!(w, "Option<");
-    }
+fn find_param<'a>(path: &Path, params: &'a Params, scopes: &[Option<ForEachLevel<'a>>]) -> Option<(String, Option<(&'a ContentType, bool)>)> {
+    let param = path.first().expect("empty path");
 
-    match ty {
-        &ContentType::String(_) => try_w!(w, "::symbiosis_rust::Content<'a>"),
-        &ContentType::Bool => try_w!(w, "bool"),
-        &ContentType::Collection(Some(ref inner), _) => {
-            try_w!(w, "::symbiosis_rust::Collection<'a, ");
-            try!(write_ty(w, inner));
-            try_w!(w, ">");
-        },
-        &ContentType::Collection(None, _) => {
-            return Err(Error::UnknownType("".into()))
-        }
-    }
-
-    if ty.is_optional() {
-        try_w!(w, ">");
-    }
-
-    Ok(())
-}
-
-fn find_param<'a>(param: &StrTendril, params: &'a HashMap<StrTendril, ContentType>, scopes: &[Option<(&str, &'a ContentType, Option<StrTendril>)>]) -> Option<(ParamTy, Option<&'a ContentType>)> {
     for scope in scopes.iter().rev() {
-        if let &Some((ref name, ref ty, ref opt_key)) = scope {
-            if *name == &**param {
-                return Some((ParamTy::Scope,Some(ty)));
-            } else if let &Some(ref key) = opt_key {
+        if let Some(ref for_each) = *scope {
+            if *for_each.alias == **param {
+                let mut access_path = vec![(param, for_each.alias_type.is_optional())];
+                return make_access_path(path, access_path, for_each.alias_type);
+            } else if let Some(ref key) = for_each.key {
                 if key == param {
-                    return Some((ParamTy::Scope, None))
+                    if path.len() == 1 {
+                        return Some((key.into(), None));
+                    } else {
+                        return None;
+                    }
                 }
             }
         }
     }
 
-    params.get(param).map(|t| (ParamTy::Param,Some(t)))
+    if let Some(ty) = params.get(&param.clone().into()) {
+        make_access_path(path, vec![(&"self".into(), false), (param, ty.is_optional())], ty)
+    } else {
+        None
+    }
+}
+
+fn make_access_path<'a>(path: &Path, base: Vec<(&StrTendril, bool)>, base_type: &'a ContentType) -> Option<(String, Option<(&'a ContentType, bool)>)> {
+    let mut access_path = base;
+    let mut current_type = Some(base_type);
+
+    if path.len() > 1 {
+        let mut current_params = match *base_type {
+            ContentType::Struct(_, ref params, _) => Some(params),
+            _ => return None,
+        };
+        let mut path = path[1..].iter();
+
+        while let (Some(params), Some(part)) = (current_params.take(), path.next()) {
+            let next_type = if let Some(ty) = params.get(&part.clone().into()) {
+                ty
+            } else {
+                return None;
+            };
+
+            access_path.push((part, next_type.is_optional()));
+            current_params = match *next_type {
+                ContentType::Struct(_, ref params, _) => Some(params),
+                _ => None,
+            };
+            current_type = Some(next_type);
+        }
+    }
+
+    if let Some(ty) = current_type {
+        let mut result_type = ty.shallow_clone();
+        let mut access_path = access_path.into_iter().rev();
+        let mut path = access_path.next().map(|(name, _)| name.into()).unwrap_or(String::new());
+
+        for (name, optional) in access_path {
+            if optional {
+                if result_type.is_optional() {
+                    path = format!("{}.as_ref().and_then(|v| &v.{})", name, path);
+                } else {
+                    path = format!("{}.as_ref().map(|v| &v.{})", name, path);
+                }
+                result_type.set_optional(true);
+            } else {
+                path = format!("{}.{}", name, path);
+            }
+        }
+
+        Some((path, Some((ty, result_type.is_optional()))))
+    } else {
+        None
+    }
 }
 
 struct Sanitized<S>(S);
@@ -453,18 +451,27 @@ impl<S> fmt::Display for Sanitized<S> where S: AsRef<str> {
     fn fmt(&self, f: &mut fmt::Formatter) ->  fmt::Result {
         for c in self.0.as_ref().chars() {
             match c {
-                '&' => try!(f.write_str("&amp;")),
+                //'&' => try!(f.write_str("&amp;")),
                 '<' => try!(f.write_str("&lt;")),
                 '>' => try!(f.write_str("&gt;")),
-                '"' => try!(f.write_str("&quot;")),
+                //'"' => try!(f.write_str("&quot;")),
+                '"' => try!(f.write_str("\\\"")),
                 '\n' => try!(f.write_str("\\n")),
                 '\t' => try!(f.write_str("\\t")),
-                '{' => try!(f.write_str("&#123;")),
-                '}' => try!(f.write_str("&#125;")),
+                //'{' => try!(f.write_str("&#123;")),
+                '{' => try!(f.write_str("{{")),
+                //'}' => try!(f.write_str("&#125;")),
+                '}' => try!(f.write_str("}}")),
                 c => try!(f.write_char(c))
             }
         }
 
         Ok(())
     }
+}
+
+struct ForEachLevel<'a> {
+    alias: StrTendril,
+    alias_type: &'a ContentType,
+    key: Option<StrTendril>,
 }

@@ -3,7 +3,7 @@ extern crate html5ever;
 extern crate string_cache;
 extern crate tendril;
 
-use std::path::Path;
+use std::path;
 use std::fs::{File, read_dir};
 use std::io::{self, Read, Write};
 use std::default::Default;
@@ -21,7 +21,7 @@ use string_cache::atom::Atom;
 
 use tendril::StrTendril;
 
-use codegen::{Token, Content, Codegen, ContentType, Scope};
+use codegen::{Token, Content, Codegen, ContentType, Scope, Path, Params};
 use fragment::{Fragment, ReturnType};
 
 use parser::ExtensibleMap;
@@ -96,7 +96,7 @@ impl TemplateGroup {
     }
 
     ///Add every `*.html` and `*.htm` file in a directory to the template group.
-    pub fn parse_directory<P: AsRef<Path>>(&mut self, dir: P) -> Result<(), Error> {
+    pub fn parse_directory<P: AsRef<path::Path>>(&mut self, dir: P) -> Result<(), Error> {
         let directory = try!(read_dir(dir));
 
         for path in directory {
@@ -146,16 +146,16 @@ impl TemplateGroup {
 
 struct ParsedTemplate {
     name: String,
-    parameters: HashMap<StrTendril, ContentType>,
+    parameters: Params,
     tokens: Vec<codegen::Token>
 }
 
 ///A single template.
 pub struct Template<'a> {
     fragments: ExtensibleMap<'a, &'static str, Box<Fragment>>,
-    parameters: HashMap<StrTendril, ContentType>,
+    parameters: Params,
     tokens: Vec<codegen::Token>,
-    scopes: Vec<Option<(StrTendril, StrTendril, Option<ContentType>, Option<StrTendril>)>>,
+    scopes: Vec<Option<(Path, StrTendril, Option<ContentType>, Option<StrTendril>)>>,
     errors: Vec<parser::Error>
 }
 
@@ -164,7 +164,7 @@ impl<'a> Template<'a> {
     pub fn new() -> Template<'a> {
         Template {
             fragments: ExtensibleMap::Owned(init_fragments()),
-            parameters: HashMap::new(),
+            parameters: Params::new(),
             tokens: vec![],
             scopes: vec![],
             errors: vec![]
@@ -174,7 +174,7 @@ impl<'a> Template<'a> {
     fn extending(fragments: &'a HashMap<&'static str, Box<Fragment>>) -> Template<'a> {
         Template {
             fragments: ExtensibleMap::extend(fragments),
-            parameters: HashMap::new(),
+            parameters: Params::new(),
             tokens: vec![],
             scopes: vec![],
             errors: vec![]
@@ -289,9 +289,9 @@ impl<'a> Template<'a> {
         for part in content {
             match part {
                 ReturnType::String(text) => self.tokens.push(Token::Text(Content::String(text))),
-                ReturnType::Placeholder(name, ty) => {
-                    try!(self.reg_placeholder(name.clone(), ty));
-                    self.tokens.push(Token::Text(Content::Placeholder(name)));
+                ReturnType::Placeholder(path, ty) => {
+                    try!(self.reg_placeholder(path.clone(), ty));
+                    self.tokens.push(Token::Text(Content::Placeholder(path)));
                 },
                 ReturnType::Logic(_) => return Err("logic can not be used as text".into()),
                 ReturnType::Scope(scope) => {
@@ -315,7 +315,7 @@ impl<'a> Template<'a> {
     fn reg_scope_vars(&mut self, scope: &Scope) -> Result<(), Cow<'static, str>> {
         match scope {
             &Scope::If(ref logic) => for p in logic.placeholders() {
-                try!(self.reg_placeholder(p.clone(), ContentType::Bool));
+                try!(self.reg_placeholder(p.clone().into(), ContentType::Bool));
                 self.scopes.push(None);
             },
             &Scope::ForEach(ref collection, ref element, ref opt_key) => {
@@ -327,7 +327,25 @@ impl<'a> Template<'a> {
         Ok(())
     }
 
-    fn reg_placeholder(&mut self, param: StrTendril, pref_ty: ContentType) -> Result<(), Cow<'static, str>> {
+    fn reg_placeholder(&mut self, path: Path, pref_ty: ContentType) -> Result<(), Cow<'static, str>> {
+        let mut path = path.into_iter();
+        let param = path.next().expect("found an empty path");
+        let mut path = path.rev();
+
+        let pref_ty = if let Some(last) = path.next() {
+            let mut fields = Params::new();
+            fields.insert(last.into(), pref_ty);
+            for part in path {
+                let next = ::std::mem::replace(&mut fields, Params::new());
+                fields.insert(part.into(), ContentType::Struct(None, next, false));
+            }
+
+            ContentType::Struct(None, fields, false)
+        } else {
+            pref_ty
+        };
+
+
         for scope in self.scopes.iter_mut().rev() {
             if let &mut Some((ref _origin, ref element, ref mut ty, ref opt_key)) = scope {
                 if element == &param {
@@ -360,7 +378,7 @@ impl<'a> Template<'a> {
     fn end_scope(&mut self) -> Result<(), Cow<'static, str>> {
         if let Some(scope) = self.scopes.pop() {
             if let Some((origin, _, ty, _)) = scope {
-                self.reg_placeholder(origin, ContentType::Collection(ty.map(|t| Box::new(t)), false))
+                self.reg_placeholder(origin.into(), ContentType::Collection(ty.map(|t| Box::new(t)), false))
             } else {
                 Ok(())
             }

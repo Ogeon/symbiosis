@@ -378,11 +378,11 @@ impl Pattern {
                     },
                     Component::Input => {
                         src.skip_whitespace();
-                        if let Some(ident) = src.take_while(|c| c == b'_' || (c as char).is_alphabetic()) {
+                        if let Some(path) = src.take_while(|c| c == b'_' || c == b'.' || (c as char).is_alphabetic()) {
                             src.skip_whitespace();
 
                             if src.eat(b'(') {
-                                get_input(src, ident.clone()).and_then(|r| {
+                                get_input(src, path.clone()).and_then(|r| {
                                     src.skip_whitespace();
                                     match src.next_char() {
                                         Some(')') => Ok(Argument::Input(r)),
@@ -390,11 +390,12 @@ impl Pattern {
                                         None => Err("expected ')'".into())
                                     }
                                 }).map_err(|mut e| {
-                                    e.add_callee(ident.to_string());
+                                    e.add_callee(path.to_string());
                                     e
                                 })
                             } else {
-                                Ok(Argument::Input(InputType::Placeholder(ident, ContentType::String(false))))
+                                let mut path: Vec<_> = path.split('.').map(From::from).collect();
+                                Ok(Argument::Input(InputType::Placeholder(path.into(), ContentType::String(false))))
                             }
                         } else {
                             if let Some(c) = src.next_char() {

@@ -3,7 +3,7 @@ use std::fmt;
 
 use tendril::StrTendril;
 
-use codegen::{Scope, Logic, ContentType};
+use codegen::{Scope, Logic, ContentType, Path};
 
 #[macro_use]
 pub mod pattern;
@@ -227,10 +227,10 @@ impl<'a, F: Fragment> Fragment for &'a F {
 
 ///Things that can be returned from fragments.
 pub enum ReturnType {
-    ///A plane text string.
+    ///A plain text string.
     String(StrTendril),
     ///A placeholder parameter and its preferred content type.
-    Placeholder(StrTendril, ContentType),
+    Placeholder(Path, ContentType),
     ///A logic expression.
     Logic(Logic),
     ///The beginning of a scope.
@@ -242,7 +242,7 @@ pub enum ReturnType {
 ///Things that can be sent into fragments.
 pub enum InputType {
     ///A placeholder parameter and its preferred content type.
-    Placeholder(StrTendril, ContentType),
+    Placeholder(Path, ContentType),
     ///A logic expression.
     Logic(Logic)
 }
@@ -363,31 +363,31 @@ impl_fragment!{
         match (args.key, args.element, args.collection) {
             (None, element, collection) => {
                 let element = match element {
-                    InputType::Placeholder(name, _) => name,
-                    e => return Err(Error::unexpected_input_type(InputType::Placeholder("element".into(), ContentType::String(false)), e))
+                    InputType::Placeholder(name, _) => name.first().expect("found empty key path in foreach").clone(),
+                    e => return Err(Error::unexpected_input_type(InputType::Placeholder(vec!["element".into()].into(), ContentType::String(false)), e))
                 };
 
                 let collection = match collection {
                     InputType::Placeholder(name, _) => name,
-                    e => return Err(Error::unexpected_input_type(InputType::Placeholder("collection".into(), ContentType::Collection(None, false)), e))
+                    e => return Err(Error::unexpected_input_type(InputType::Placeholder(vec!["collection".into()].into(), ContentType::Collection(None, false)), e))
                 };
 
                 Ok(ReturnType::Scope(Scope::ForEach(collection, element, None)))
             },
             (Some(Key{ k: key }), element, collection) => {
                 let key = match key {
-                    InputType::Placeholder(name, _) => name,
-                    e => return Err(Error::unexpected_input_type(InputType::Placeholder("key".into(), ContentType::String(false)), e))
+                    InputType::Placeholder(name, _) => name.first().expect("found empty key path in foreach").clone(),
+                    e => return Err(Error::unexpected_input_type(InputType::Placeholder(vec!["key".into()].into(), ContentType::String(false)), e))
                 };
 
                 let element = match element {
-                    InputType::Placeholder(name, _) => name,
-                    e => return Err(Error::unexpected_input_type(InputType::Placeholder("element".into(), ContentType::String(false)), e))
+                    InputType::Placeholder(name, _) => name.first().expect("found empty key path in foreach").clone(),
+                    e => return Err(Error::unexpected_input_type(InputType::Placeholder(vec!["element".into()].into(), ContentType::String(false)), e))
                 };
 
                 let collection = match collection {
                     InputType::Placeholder(name, _) => name,
-                    e => return Err(Error::unexpected_input_type(InputType::Placeholder("collection".into(), ContentType::Collection(None, false)), e))
+                    e => return Err(Error::unexpected_input_type(InputType::Placeholder(vec!["collection".into()].into(), ContentType::Collection(None, false)), e))
                 };
 
                 Ok(ReturnType::Scope(Scope::ForEach(collection, element, Some(key))))
