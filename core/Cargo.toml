@@ -1,13 +1,12 @@
 [package]
-
-name = "symbiosis"
+name = "symbiosis_core"
 version = "0.0.1"
 authors = ["Erik Hedvall <hello@erikhedvall.nu>"]
+
+[lib]
+name = "symbiosis_core"
 
 [dependencies]
 html5ever = "0.4"
 string_cache = "0.2"
 tendril = "0.2"
-
-[dependencies.symbiosis_core]
-path = "core"

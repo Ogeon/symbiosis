@@ -513,7 +513,7 @@ fn write_attribute<'a, W: Write>(
                 try_w!(w, "{} += \"{}\";", var, content);
             }
         },
-        &Content::Placeholder(ref placeholder) => {
+        &Content::Placeholder(ref placeholder, _) => {
             match find_param(placeholder, params, &scopes) {
                 Some((alias, Some(&ContentType::String(_)))) | Some((alias, Some(&ContentType::Bool))) | Some((alias, None)) => {
                     if new {
@@ -556,7 +556,7 @@ fn write_text<'a, W: Write>(
             try_w!(w, "{} += \"{}\";", var, Sanitized(content));
             *state = TextState::HasContent;
         },
-        &Content::Placeholder(ref placeholder) => {
+        &Content::Placeholder(ref placeholder, _) => {
             match find_param(placeholder, params, &scopes) {
                 Some((alias, Some(&ContentType::String(_)))) | Some((alias, Some(&ContentType::Bool))) | Some((alias, None)) => {
                     match alias {

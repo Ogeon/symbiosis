@@ -1,6 +1,5 @@
 use std::io::{self, Write};
 use std::fmt::Write as FmtWrite;
-use std::collections::HashMap;
 use std::default::Default;
 use std::fmt;
 
@@ -55,11 +54,6 @@ impl From<fmt::Error> for Error {
 pub enum Visibility {
     Public,
     Private
-}
-
-enum ParamTy {
-    Param,
-    Scope
 }
 
 ///Code generator for Rust templates.
@@ -188,7 +182,7 @@ impl<'a> Codegen for Rust<'a> {
                     &Token::CloseTag(ref name) => try_w_s!(string_buf, "</{}>", name),
                     &Token::BeginAttribute(ref name, ref content) => match content {
                         &Content::String(ref content) => try_w_s!(string_buf, " {}=\\\"{}", name, content),
-                        &Content::Placeholder(ref placeholder) => {
+                        &Content::Placeholder(ref placeholder, _) => {
                             match find_param(placeholder, params, &scopes) {
                                 Some((access_path, Some((&ContentType::String(_), false)))) | Some((access_path, None)) => {
                                     try_w_s!(string_buf, " {}=\\\"{{}}", name);
@@ -213,7 +207,7 @@ impl<'a> Codegen for Rust<'a> {
                     },
                     &Token::AppendToAttribute(ref text) | &Token::Text(ref text) => match text {
                         &Content::String(ref content) => try_w_s!(string_buf, "{}", content),
-                        &Content::Placeholder(ref placeholder) => {
+                        &Content::Placeholder(ref placeholder, _) => {
                             match find_param(placeholder, params, &scopes) {
                                 Some((access_path, Some((&ContentType::String(_), false)))) | Some((access_path, None)) => {
                                     string_buf.push_str("{}");
@@ -373,7 +367,7 @@ fn find_param<'a>(path: &Path, params: &'a Params, scopes: &[Option<ForEachLevel
     for scope in scopes.iter().rev() {
         if let Some(ref for_each) = *scope {
             if *for_each.alias == **param {
-                let mut access_path = vec![(param, for_each.alias_type.is_optional())];
+                let access_path = vec![(param, for_each.alias_type.is_optional())];
                 return make_access_path(path, access_path, for_each.alias_type);
             } else if let Some(ref key) = for_each.key {
                 if key == param {

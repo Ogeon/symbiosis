@@ -256,7 +256,6 @@ impl fmt::Debug for InputType {
     }
 }
 
-
 impl_fragment!{
     #[doc = "Start of an `if` scope."]
     #[doc = ""]

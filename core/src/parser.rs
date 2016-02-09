@@ -42,6 +42,10 @@ pub enum ExtensibleMap<'a, K: 'a, V: 'a> {
 }
 
 impl<'a, K: Hash + Eq, V> ExtensibleMap<'a, K, V> {
+    pub fn new() -> ExtensibleMap<'a, K, V> {
+        ExtensibleMap::Owned(HashMap::new())
+    }
+    
     pub fn extend(base: &'a HashMap<K, V>) -> ExtensibleMap<'a, K, V> {
         ExtensibleMap::Extended(base, HashMap::new())
     }

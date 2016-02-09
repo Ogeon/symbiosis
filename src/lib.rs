@@ -2,71 +2,30 @@ extern crate html5ever;
 #[macro_use]
 extern crate string_cache;
 extern crate tendril;
+extern crate symbiosis_core;
 
 use std::path;
 use std::fs::{File, read_dir};
-use std::io::{self, Read, Write};
-use std::default::Default;
+use std::io::{Read, Write};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::fmt;
 use std::mem::swap;
-
-use html5ever::Attribute;
-use html5ever::tokenizer::{Tokenizer, TokenSink, Tag, TagKind, Doctype};
-use html5ever::tokenizer::Token as HtmlToken;
-
-use string_cache::atom::Atom;
 
 use tendril::StrTendril;
 
-use codegen::{Token, Content, Codegen, ContentType, Scope, Path, Params};
-use fragment::{Fragment, ReturnType};
+pub use symbiosis_core::{fragment, Error};
+use symbiosis_core::{Tokenizer, TokenSink};
+use symbiosis_core::parser::{self, ExtensibleMap};
 
-use parser::ExtensibleMap;
+use codegen::{Token, Content, Codegen, ContentType, Scope, Path, Params};
+use fragment::Fragment;
+
 
 #[macro_use]
 pub mod codegen;
-pub mod fragment;
 pub mod javascript;
 pub mod rust;
-mod parser;
-
-#[derive(Debug)]
-pub enum Error {
-    Io(io::Error),
-    Format(fmt::Error),
-    Parse(Vec<parser::Error>)
-}
-
-impl From<io::Error> for Error {
-    fn from(e: io::Error) -> Error {
-        Error::Io(e)
-    }
-}
-
-impl From<fmt::Error> for Error {
-    fn from(e: fmt::Error) -> Error {
-        Error::Format(e)
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            &Error::Io(ref e) => e.fmt(f),
-            &Error::Format(ref e) => e.fmt(f),
-            &Error::Parse(ref e) => {
-                try!(write!(f, "parse errors:\n"));
-                for error in e.iter() {
-                    try!(write!(f, " - {}\n", error));
-                }
-                Ok(())
-            }
-        }
-    }
-}
 
 ///A collection of templates.
 pub struct TemplateGroup {
@@ -156,7 +115,7 @@ pub struct Template<'a> {
     parameters: Params,
     tokens: Vec<codegen::Token>,
     scopes: Vec<Option<(Path, StrTendril, Option<ContentType>, Option<StrTendril>)>>,
-    errors: Vec<parser::Error>
+    errors: Vec<parser::Error>,
 }
 
 impl<'a> Template<'a> {
@@ -167,7 +126,7 @@ impl<'a> Template<'a> {
             parameters: Params::new(),
             tokens: vec![],
             scopes: vec![],
-            errors: vec![]
+            errors: vec![],
         }
     }
 
@@ -177,15 +136,15 @@ impl<'a> Template<'a> {
             parameters: Params::new(),
             tokens: vec![],
             scopes: vec![],
-            errors: vec![]
+            errors: vec![],
         }
     }
 
     ///Add content from a string to the template.
     pub fn parse_string(&mut self, source: String) -> Result<(), Error> {
         {
-            let mut tokenizer = Tokenizer::new(&mut*self, Default::default());
-            tokenizer.feed(source.into());
+            let mut tokenizer = Tokenizer::new(&mut *self);
+            try!(tokenizer.parse_string(source));
         }
 
         if self.errors.len() > 0 {
@@ -207,109 +166,6 @@ impl<'a> Template<'a> {
     pub fn emit_code<W: Write, C: Codegen>(&self, template_name: &str, writer: &mut W, codegen: &C) -> Result<(), C::Error> {
         let mut writer = codegen.init_writer(writer);
         codegen.build_template(&mut writer, template_name, &self.parameters, &self.tokens)
-    }
-
-    fn set_doctype(&mut self, doctype: Doctype) {
-        self.tokens.push(Token::SetDoctype(doctype));
-    }
-
-    fn open_tag(&mut self, name: Atom, attributes: Vec<Attribute>, self_closing: bool) -> Result<(), parser::Error> {
-        let void = is_void(&name);
-        self.tokens.push(Token::BeginTag(name));
-
-        for attribute in attributes {
-            let mut content = try!(parser::parse_content(attribute.value, &self.fragments)).into_iter();
-            match content.next() {
-                Some(ReturnType::String(text)) => self.tokens.push(Token::BeginAttribute(attribute.name.local, Content::String(text))),
-                Some(ReturnType::Placeholder(name, ty)) => {
-                    try!(self.reg_placeholder(name.clone(), ty));
-                    self.tokens.push(Token::BeginAttribute(attribute.name.local, Content::Placeholder(name)));
-                },
-                Some(ReturnType::Logic(_)) => return Err("logic can not be used as text".into()),
-                Some(ReturnType::Scope(scope)) => {
-                    self.tokens.push(Token::BeginAttribute(attribute.name.local, Content::String(StrTendril::new())));
-                    try!(self.reg_scope_vars(&scope));
-                    self.tokens.push(Token::Scope(scope));
-                },
-                Some(ReturnType::End) => {
-                    try!(self.end_scope());
-                    self.tokens.push(Token::End);
-                    self.tokens.push(Token::BeginAttribute(attribute.name.local, Content::String(StrTendril::new())));
-                },
-                None => self.tokens.push(Token::BeginAttribute(attribute.name.local, Content::String(StrTendril::new())))
-            }
-
-            for part in content {
-                match part {
-                    ReturnType::String(text) => self.tokens.push(Token::AppendToAttribute(Content::String(text))),
-                    ReturnType::Placeholder(name, ty) => {
-                        try!(self.reg_placeholder(name.clone(), ty));
-                        self.tokens.push(Token::AppendToAttribute(Content::Placeholder(name)));
-                    },
-                    ReturnType::Logic(_) => return Err("logic can not be used as text".into()),
-                    ReturnType::Scope(scope) => {
-                        try!(self.reg_scope_vars(&scope));
-                        self.tokens.push(Token::Scope(scope));
-                    },
-                    ReturnType::End => {
-                        try!(self.end_scope());
-                        self.tokens.push(Token::End);
-                    },
-                }
-            }
-
-            self.tokens.push(Token::EndAttribute);
-        }
-
-        self.tokens.push(Token::EndTag(void || self_closing));
-
-        Ok(())
-    }
-
-    fn add_text(&mut self, text: StrTendril) -> Result<(), parser::Error> {
-        let mut content = try!(parser::parse_content(text, &self.fragments)).into_iter();
-        match content.next() {
-            Some(ReturnType::String(text)) => self.tokens.push(Token::Text(Content::String(text))),
-            Some(ReturnType::Placeholder(name, ty)) => {
-                try!(self.reg_placeholder(name.clone(), ty));
-                self.tokens.push(Token::Text(Content::Placeholder(name)));
-            },
-            Some(ReturnType::Logic(_)) => return Err("logic can not be used as text".into()),
-            Some(ReturnType::Scope(scope)) => {
-                try!(self.reg_scope_vars(&scope));
-                self.tokens.push(Token::Scope(scope));
-            },
-            Some(ReturnType::End) => {
-                try!(self.end_scope());
-                self.tokens.push(Token::End);
-            },
-            None => return Ok(())
-        }
-
-        for part in content {
-            match part {
-                ReturnType::String(text) => self.tokens.push(Token::Text(Content::String(text))),
-                ReturnType::Placeholder(path, ty) => {
-                    try!(self.reg_placeholder(path.clone(), ty));
-                    self.tokens.push(Token::Text(Content::Placeholder(path)));
-                },
-                ReturnType::Logic(_) => return Err("logic can not be used as text".into()),
-                ReturnType::Scope(scope) => {
-                    try!(self.reg_scope_vars(&scope));
-                    self.tokens.push(Token::Scope(scope));
-                },
-                ReturnType::End => {
-                    try!(self.end_scope());
-                    self.tokens.push(Token::End);
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    fn close_tag(&mut self, tag: Atom) {
-        self.tokens.push(Token::CloseTag(tag));
     }
 
     fn reg_scope_vars(&mut self, scope: &Scope) -> Result<(), Cow<'static, str>> {
@@ -389,54 +245,58 @@ impl<'a> Template<'a> {
 }
 
 impl<'a, 'b: 'a> TokenSink for &'a mut Template<'b> {
-    fn process_token(&mut self, token: HtmlToken) {
+    fn process_token(&mut self, token: Token) {
         match token {
-            HtmlToken::TagToken(Tag {
-                kind: TagKind::StartTag,
-                name,
-                attrs,
-                self_closing
-            }) => if let Err(e) = self.open_tag(name, attrs, self_closing) {
-                self.errors.push(e.into());
-            },
-            HtmlToken::TagToken(Tag {
-                kind: TagKind::EndTag,
-                name,
-                ..
-            }) => self.close_tag(name),
-            HtmlToken::CharacterTokens(text) => if let Err(e) = self.add_text(text) {
-                self.errors.push(e.into());
-            },
-            HtmlToken::DoctypeToken(doctype) => self.set_doctype(doctype),
+            Token::SetDoctype(doctype) => self.tokens.push(Token::SetDoctype(doctype)),
+            Token::BeginTag(name) => self.tokens.push(Token::BeginTag(name)),
+            Token::EndTag(self_close) => self.tokens.push(Token::EndTag(self_close)),
+            Token::CloseTag(name) => self.tokens.push(Token::CloseTag(name)),
 
-            HtmlToken::CommentToken(_) => {},
-            HtmlToken::NullCharacterToken => {},
-            HtmlToken::EOFToken => {},
-
-            HtmlToken::ParseError(e) => self.errors.push(e.into())
+            Token::BeginAttribute(attr, content) => match content {
+                Content::String(content) => self.tokens.push(Token::BeginAttribute(attr, Content::String(content))),
+                Content::Placeholder(name, ty) => {
+                    if let Err(e) = self.reg_placeholder(name.clone(), ty.clone()) {
+                        self.errors.push(e.into());
+                    }
+                    self.tokens.push(Token::BeginAttribute(attr, Content::Placeholder(name, ty)));
+                }
+            },
+            Token::AppendToAttribute(content) => match content {
+                Content::String(content) => self.tokens.push(Token::AppendToAttribute(Content::String(content))),
+                Content::Placeholder(name, ty) => {
+                    if let Err(e) = self.reg_placeholder(name.clone(), ty.clone()) {
+                        self.errors.push(e.into());
+                    }
+                    self.tokens.push(Token::AppendToAttribute(Content::Placeholder(name, ty)));
+                }
+            },
+            Token::Text(content) => match content {
+                Content::String(content) => self.tokens.push(Token::Text(Content::String(content))),
+                Content::Placeholder(name, ty) => {
+                    if let Err(e) = self.reg_placeholder(name.clone(), ty.clone()) {
+                        self.errors.push(e.into());
+                    }
+                    self.tokens.push(Token::Text(Content::Placeholder(name, ty)));
+                }
+            },
+            Token::EndAttribute => self.tokens.push(Token::EndAttribute),
+            Token::Scope(scope) => {
+                if let Err(e) = self.reg_scope_vars(&scope) {
+                    self.errors.push(e.into());
+                }
+                self.tokens.push(Token::Scope(scope));
+            },
+            Token::End => {
+                if let Err(e) = self.end_scope() {
+                    self.errors.push(e.into());
+                }
+                self.tokens.push(Token::End);
+            },
         }
     }
-}
 
-// http://www.w3.org/TR/html5/syntax.html#void-elements
-fn is_void(tag: &str) -> bool {
-    match tag {
-        "area" |
-        "base" |
-        "br" |
-        "col" |
-        "embed" |
-        "hr" |
-        "img" |
-        "input" |
-        "keygen" |
-        "link" |
-        "meta" |
-        "param" |
-        "source" |
-        "track" |
-        "wbr" => true,
-        _ => false
+    fn fragments(&self) -> &ExtensibleMap<&'static str, Box<Fragment>> {
+        &self.fragments
     }
 }
 
