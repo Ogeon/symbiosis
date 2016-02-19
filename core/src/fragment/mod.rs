@@ -235,6 +235,7 @@ impl<'a, F: Fragment> Fragment for &'a F {
 }
 
 ///Things that can be returned from fragments.
+#[derive(Debug)]
 pub enum ReturnType {
     ///A plain text string.
     String(StrTendril),

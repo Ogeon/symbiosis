@@ -37,6 +37,16 @@ impl From<String> for Name {
     }
 }
 
+impl From<Name> for StrTendril {
+    fn from(name: Name) -> StrTendril {
+        match name {
+            Name::Atom(a) => (&*a).into(),
+            Name::Str(s) => s.into(),
+            Name::Tendril(t) => t,
+        }
+    }
+}
+
 impl Deref for Name {
     type Target = str;
 
@@ -85,6 +95,7 @@ pub enum Content {
 }
 
 ///Representation of supported scope types.
+#[derive(Debug)]
 pub enum Scope {
     ///Everything within an `if` scope will be hidden if the provided logic
     ///expression is false.
@@ -95,6 +106,7 @@ pub enum Scope {
 }
 
 ///Logic expressions.
+#[derive(Debug)]
 pub enum Logic {
     ///a and b and ...
     And(Vec<Logic>),

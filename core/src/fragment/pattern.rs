@@ -4,8 +4,7 @@ use std::fmt;
 use tendril::StrTendril;
 
 use fragment::{InputType, Error};
-use codegen::ContentType;
-use parser::Slicer;
+use parser::{Input, FragmentKind};
 
 ///Tool for building input patterns.
 ///
@@ -344,25 +343,21 @@ impl Pattern {
     }
 
     #[doc(hidden)]
-    pub fn parse<F>(&self, src: &mut Slicer, mut get_input: F) -> Result<Vec<Argument>, Error> where F: FnMut(&mut Slicer, StrTendril) -> Result<InputType, Error> {
-        self.parse_using(src, &mut get_input)
+    pub fn parse<F>(&self, src: &[Input], mut get_input: F) -> Result<Vec<Argument>, Error> where F: FnMut(&FragmentKind) -> Result<InputType, Error> {
+        let mut src = InputSlicer::new(Cow::Borrowed(src));
+        self.parse_using(&mut src, &mut get_input)
     }
 
-    fn parse_using<F>(&self, src: &mut Slicer, get_input: &mut F) -> Result<Vec<Argument>, Error> where F: FnMut(&mut Slicer, StrTendril) -> Result<InputType, Error> {
-        let mut result = Vec::new();
-        let mut optionals = Vec::new();
+    fn parse_using<F>(&self, src: &mut InputSlicer, get_input: &mut F) -> Result<Vec<Argument>, Error> where F: FnMut(&FragmentKind) -> Result<InputType, Error> {
+        let mut result = vec![];
+        let mut optionals = vec![];
 
         while result.len() < self.0.len() {
             for component in &self.0[result.len()..] {
-                let res = match *component { 
-                    Component::Token(ref t) => {
-                        src.skip_whitespace();
-                        if src.eat_bytes(t.as_bytes()) {
-                            Ok(Argument::Token(t.clone()))
-                        } else {
-                            Err(format!("expected '{}'", t).into())
-                        }
-                    },
+                let res = match *component {
+                    Component::Token(ref t) => src.expect_token_str(t).map(Argument::Token).ok_or_else(|| format!("expected '{}'", t).into()),
+                    Component::Input => src.expect_input().ok_or_else(|| "expected input".into()).and_then(&mut *get_input).map(Argument::Input),
+                    Component::String => src.expect_string().map(Argument::String).ok_or_else(|| "expected a string".into()),
                     Component::Repeat { at_least, ref delimiter, ref pattern } => {
                         let mut repeats = Vec::new();
                         let mut snapshot = src.offset();
@@ -373,14 +368,14 @@ impl Pattern {
                                 Ok(res) => {
                                     repeats.push(res);
                                     snapshot = src.offset();
-                                    src.skip_whitespace();
-                                    if !src.eat_bytes(delimiter.as_bytes()) {
+                                    if src.expect_token_str(delimiter).is_none() {
+                                        src.jump_to(&snapshot);
                                         break;
                                     }
                                 },
                                 Err(e) => {
                                     error = Some(e);
-                                    src.jump_to(snapshot);
+                                    src.jump_to(&snapshot);
                                     break
                                 }
                             }
@@ -400,59 +395,6 @@ impl Pattern {
                         optionals.push((result.len(), src.offset()));
                         pattern.parse_using(src, get_input).map(|r| Argument::Optional(Some(r)))
                     },
-                    Component::Input => {
-                        src.skip_whitespace();
-                        if let Some(path) = src.take_while(|c| c == b'_' || c == b'.' || (c as char).is_alphabetic()) {
-                            src.skip_whitespace();
-
-                            if src.eat(b'(') {
-                                get_input(src, path.clone()).and_then(|r| {
-                                    src.skip_whitespace();
-                                    match src.next_char() {
-                                        Some(')') => Ok(Argument::Input(r)),
-                                        Some(c) => Err(format!("expected ')', but found {}", c).into()),
-                                        None => Err("expected ')'".into())
-                                    }
-                                }).map_err(|mut e| {
-                                    e.add_callee(path.to_string());
-                                    e
-                                })
-                            } else {
-                                let path: Vec<_> = path.split('.').map(From::from).collect();
-                                Ok(Argument::Input(InputType::Placeholder(path.into(), ContentType::String(false))))
-                            }
-                        } else {
-                            if let Some(c) = src.next_char() {
-                                Err(format!("expected an identifier, but found {}", c).into())
-                            } else {
-                                Err("expected an identifier".into())
-                            }
-                        }
-                    },
-                    Component::String => {
-                        src.skip_whitespace();
-                        if src.eat(b'"') {
-                            if let Some(string) = src.take_while(|c| c != b'"') {
-                                if !src.eat(b'"') {
-                                    Err("expected \" at the end of a string".into())
-                                } else {
-                                    Ok(Argument::String(string))
-                                }
-                            } else {
-                                if src.eat(b'"') {
-                                    Ok(Argument::String("".into()))
-                                } else {
-                                    Err("expected \" at the end of a string".into())
-                                }
-                            }
-                        } else {
-                            if let Some(c) = src.next_char() {
-                                Err(format!("expected a string, but found {}", c).into())
-                            } else {
-                                Err("expected a string".into())
-                            }
-                        }
-                    },
                 };
 
                 match res {
@@ -462,7 +404,7 @@ impl Pattern {
                     Err(e) => if let Some((old_len, old_offset)) = optionals.pop() {
                         result.truncate(old_len);
                         result.push(Argument::Optional(None));
-                        src.jump_to(old_offset);
+                        src.jump_to(&old_offset);
                         break;
                     } else {
                         return Err(e);
@@ -497,7 +439,7 @@ pub enum Component {
 ///
 ///See `Component` for details.
 pub enum Argument {
-    Token(Cow<'static, str>),
+    Token(StrTendril),
     Repeat(Vec<Vec<Argument>>),
     Optional(Option<Vec<Argument>>),
     Input(InputType),
@@ -505,7 +447,7 @@ pub enum Argument {
 }
 
 impl Argument {
-    pub fn into_token(self) -> Result<Cow<'static, str>, Argument> {
+    pub fn into_token(self) -> Result<StrTendril, Argument> {
         match self {
             Argument::Token(t) => Ok(t),
             other => Err(other)
@@ -550,6 +492,145 @@ impl fmt::Debug for Argument {
             Argument::Optional(Some(ref p)) => write!(f, "(opt) {:?}", p),
             Argument::Input(ref i) => i.fmt(f),
             Argument::String(ref s) => s.fmt(f),
+        }
+    }
+}
+
+struct InputSlicer<'a> {
+    input: Cow<'a, [Input]>,
+    offset: usize,
+    sub_slicer: Option<Box<InputSlicer<'a>>>,
+}
+
+impl<'a> InputSlicer<'a> {
+    fn new(input: Cow<'a, [Input]>) -> InputSlicer {
+        InputSlicer {
+            input: input,
+            offset: 0,
+            sub_slicer: None,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        if let Some(ref sub) = self.sub_slicer {
+            sub.is_empty() && self.offset >= self.input.len()
+        } else {
+            self.offset >= self.input.len()
+        }
+    }
+
+    fn next(&mut self) -> Option<&Input> {
+        let incr_self = if let Some(ref sub) = self.sub_slicer {
+            sub.is_empty()
+        } else {
+            true
+        };
+
+        if incr_self {
+            self.offset += 1;
+            self.sub_slicer = None;
+            self.input.get(self.offset - 1)
+        } else {
+            self.sub_slicer.as_mut().and_then(|s| s.next())
+        }
+    }
+
+    fn next_token(&mut self) -> Option<&Input> {
+        let incr_self = if let Some(ref sub) = self.sub_slicer {
+            sub.is_empty()
+        } else {
+            true
+        };
+
+        if incr_self {
+            self.offset += 1;
+            self.sub_slicer = None;
+            if let Some(&Input::Fragment(ref f)) = self.input.get(self.offset - 1) {
+                self.sub_slicer = Some(Box::new(InputSlicer::new(Cow::Owned(deconstruct_fragment(f)))));
+                self.sub_slicer.as_mut().and_then(|s| s.next_token())
+            } else {
+                self.input.get(self.offset - 1)
+            }
+        } else {
+            self.sub_slicer.as_mut().and_then(|s| s.next_token())
+        }
+    }
+
+    fn expect_token_str(&mut self, token: &str) -> Option<StrTendril> {
+        match self.next_token() {
+            Some(&Input::String(_)) => None,
+            Some(&Input::Other(ref s)) => if &**s == token {
+                Some(s.clone())
+            } else {
+                None
+            },
+            Some(&Input::Fragment(_)) => None,
+            None => None
+        }
+    }
+
+    fn expect_input(&mut self) -> Option<&FragmentKind> {
+        if let Some(&Input::Fragment(ref fragment)) = self.next() {
+            Some(fragment)
+        } else {
+            None
+        }
+    }
+
+    fn expect_string(&mut self) -> Option<StrTendril> {
+        if let Some(&Input::String(ref s)) = self.next() {
+            Some(s.clone())
+        } else {
+            None
+        }
+    }
+
+    fn jump_to(&mut self, indices: &[usize]) {
+        let mut current = Some(self);
+        let mut indices = indices.iter();
+        let mut index = indices.next();
+        while let (Some(slicer), Some(&i)) = (current.take(), index.take()) {
+            slicer.offset = i;
+
+            if let (Some(next), Some(&Input::Fragment(ref f))) = (indices.next(), slicer.input.get(slicer.offset)) {
+                slicer.sub_slicer = Some(Box::new(InputSlicer::new(Cow::Owned(deconstruct_fragment(f)))));
+                current = slicer.sub_slicer.as_mut().map(|s| &mut **s);
+                index = Some(next);
+            }
+        }
+    }
+
+    fn offset(&self) -> Vec<usize> {
+        let mut offsets = vec![];
+        let mut current = Some(self);
+        while let Some(slicer) = current.take() {
+            offsets.push(slicer.offset);
+            current = slicer.sub_slicer.as_ref().map(|s| &**s);
+        }
+
+        offsets
+    }
+}
+
+fn deconstruct_fragment(fragment: &FragmentKind) -> Vec<Input> {
+    match *fragment {
+        FragmentKind::Function(ref name, ref args) => {
+            let mut input = vec![Input::Other(name.clone()), Input::Other("(".into())];
+            input.extend(args.iter().cloned());
+            input.push(Input::Other(")".into()));
+            input
+        },
+        FragmentKind::Placeholder(ref path) => {
+            let mut path = path.iter();
+            let mut input = path.next().map(|s| vec![Input::Other(s.clone())]).unwrap_or_default();
+            let dot = StrTendril::from(".");
+
+            for s in path {
+                input.push(Input::Other(dot.clone()));
+                input.push(Input::Other(s.clone()));
+            }
+
+            input
         }
     }
 }

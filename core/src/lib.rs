@@ -1,6 +1,7 @@
 extern crate tendril;
 extern crate html5ever;
 extern crate string_cache;
+extern crate lalrpop_util;
 
 use std::mem::replace;
 use std::fmt;

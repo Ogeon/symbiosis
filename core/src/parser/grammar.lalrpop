@@ -1,0 +1,33 @@
+use tendril::StrTendril;
+use super::{FragmentKind, Token, Input};
+use codegen::Path;
+
+grammar;
+
+extern {
+    enum Token {
+        Ident => Token::Ident(<StrTendril>),
+        "." => Token::Period,
+        "(" => Token::OpenParen,
+        ")" => Token::CloseParen,
+        String => Token::String(<StrTendril>),
+        Other => Token::Other(<StrTendril>),
+    }
+}
+
+pub Fragment: FragmentKind = {
+    <name: Ident> "(" <tokens: (<Input>)*> ")" => FragmentKind::Function(name, tokens),
+    <path: Path> => FragmentKind::Placeholder(path),
+};
+
+Path: Path = <v: (<Ident> ".")*> <last: Ident> => {
+    let mut v: Vec<_> = v.into_iter().map(StrTendril::from).collect();
+    v.push(last.into());
+    v.into()
+};
+
+Input: Input = {
+    Fragment => Input::Fragment(<>),
+    String => Input::String(<>),
+    Other => Input::Other(<>),
+};

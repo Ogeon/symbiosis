@@ -7,18 +7,33 @@ use std::fmt;
 use tendril::StrTendril;
 
 use fragment::{self, Fragment, InputType, ReturnType};
-use codegen::ContentType;
+use codegen::{ContentType, Path};
+
+use lalrpop_util::ParseError as LalrpopError;
+
+mod grammar;
+
+pub type ParseError = LalrpopError<(), Token, ()>;
+
 
 #[derive(Debug)]
 pub enum Error {
     Fragment(fragment::Error),
-    Other(Cow<'static, str>)
+    Parse(ParseError),
+    Other(Cow<'static, str>),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             Error::Fragment(ref e) => write!(f, "during fragment expansion: {}", e),
+            Error::Parse(ref e) => match *e {
+                LalrpopError::InvalidToken { .. } => write!(f, "parse error: invalid token"),
+                LalrpopError::UnrecognizedToken { token: None, .. } => write!(f, "parse error: unrecognized token"),
+                LalrpopError::UnrecognizedToken { token: Some((_, ref t, _)), .. } => write!(f, "parse error: unrecognized token {:?}", t),
+                LalrpopError::ExtraToken { token: (_, ref t, _), .. } => write!(f, "parse error: extra token {:?}", t),
+                LalrpopError::User { ref error } => write!(f, "parse error: {:?}", error),
+            },
             Error::Other(ref e) => write!(f, "while parsing: {}", e)
         }
     }
@@ -30,9 +45,27 @@ impl From<fragment::Error> for Error {
     }
 }
 
-impl<T: Into<Cow<'static, str>>> From<T> for Error {
-    fn from(error: T) -> Error {
+impl From<ParseError> for Error {
+    fn from(error: LalrpopError<(), Token, ()>) -> Error {
+        Error::Parse(error)
+    }
+}
+
+impl From<&'static str> for Error {
+    fn from(error: &'static str) -> Error {
         Error::Other(error.into())
+    }
+}
+
+impl From<String> for Error {
+    fn from(error: String) -> Error {
+        Error::Other(error.into())
+    }
+}
+
+impl From<Cow<'static, str>> for Error {
+    fn from(error: Cow<'static, str>) -> Error {
+        Error::Other(error)
     }
 }
 
@@ -82,7 +115,12 @@ pub fn parse_content(content: StrTendril, fragments: &ExtensibleMap<&'static str
                         content.discard();
                     }
 
-                    tokens.push(try!(parse_fragment(&mut content, fragments)));
+                    let fragment = try!(grammar::parse_Fragment(Tokenizer::new(&mut content)));
+                    let ret = match try!(eval_fragment(&fragment, fragments)) {
+                        ReturnType::Placeholder(ref path, _) if &**path == &["end".into()] => ReturnType::End,
+                        ret => ret,
+                    };
+                    tokens.push(ret);
 
                     content.skip_whitespace();
                     if !content.eat_bytes(b"}}") {
@@ -113,62 +151,51 @@ pub fn parse_content(content: StrTendril, fragments: &ExtensibleMap<&'static str
     Ok(tokens)
 }
 
-fn parse_fragment(content: &mut Slicer, fragments: &ExtensibleMap<&'static str, Box<Fragment>>) -> Result<ReturnType, fragment::Error> {
-    content.skip_whitespace();
-    if let Some(name) = content.take_while(|c| c == b'_' ||  c == b'.' || (c as char).is_alphabetic()) {
-        content.skip_whitespace();
-        if content.eat(b'(') {
-            if let Some(fragment) = fragments.get(&*name) {
+fn eval_fragment(fragment: &FragmentKind, fragments: &ExtensibleMap<&'static str, Box<Fragment>>) -> Result<ReturnType, fragment::Error> {
+    match *fragment {
+        FragmentKind::Function(ref name, ref args) => {
+            if let Some(fragment) = fragments.get(&**name) {
                 let pattern = fragment.pattern();
-                pattern.parse(content, |src, inner| inner_fragment(src, inner, fragments))
-                    .and_then(|args| {
-                        content.skip_whitespace();
-                        match content.next_char() {
-                            Some(')') => fragment.process(args),
-                            Some(c) => Err(format!("expected ')', but found {}", c).into()),
-                            None => Err("expected ')'".into())
-                        }
-                    }).map_err(|mut e| {
+                pattern.parse(args, |inner| match try!(eval_fragment(inner, fragments)) {
+                        ReturnType::Placeholder(name, ty) => Ok(InputType::Placeholder(name, ty)),
+                        ReturnType::Logic(cond) => Ok(InputType::Logic(cond)),
+                        _ => Err("inner fragments must only return placeholders and logic".into())
+                    })
+                    .and_then(|args| fragment.process(args))
+                    .map_err(|mut e| {
                         e.add_callee(fragment.identifier());
                         e
                     })
             } else {
                 Err(format!("'{}' is not a registered fragment", name).into())
             }
-        } else if &*name == "end" {
-            Ok(ReturnType::End)
-        } else if name.len() > 0 {
-            let path: Vec<_> = name.split('.').map(From::from).collect();
-            Ok(ReturnType::Placeholder(path.into(), ContentType::String(false)))
-        } else {
-            Err("empty fragment".into())
-        }
-    } else {
-        if let Some(c) = content.next_char() {
-            Err(format!("expected an identifier, but found {}", c).into())
-        } else {
-            Err("expected an identifier".into())
-        }
+        },
+        FragmentKind::Placeholder(ref path) => Ok(ReturnType::Placeholder(path.clone(), ContentType::String(false)))
     }
 }
 
-fn inner_fragment(content: &mut Slicer, name: StrTendril, fragments: &ExtensibleMap<&'static str, Box<Fragment>>) -> Result<InputType, fragment::Error> {
-    if let Some(fragment) = fragments.get(&*name) {
-        let pattern = fragment.pattern();
-        pattern.parse(content, |src, inner| inner_fragment(src, inner, fragments))
-            .and_then(|args| {
-                match try!(fragment.process(args)) {
-                    ReturnType::Placeholder(name, ty) => Ok(InputType::Placeholder(name, ty)),
-                    ReturnType::Logic(cond) => Ok(InputType::Logic(cond)),
-                    _ => return Err("inner fragments must only return placeholders and logic".into())
-                }
-            }).map_err(|mut e| {
-                e.add_callee(fragment.identifier());
-                e
-            })
-    } else {
-        Err(format!("'{}' is not a registered fragment", name).into())
-    }
+#[derive(Debug, Clone)]
+pub enum FragmentKind {
+    Placeholder(Path),
+    Function(StrTendril, Vec<Input>),
+}
+
+#[derive(Debug, Clone)]
+pub enum Token {
+    Ident(StrTendril),
+    Period,
+    OpenParen,
+    CloseParen,
+    String(StrTendril),
+    Other(StrTendril),
+    FragmentEnd,
+}
+
+#[derive(Debug, Clone)]
+pub enum Input {
+    Fragment(FragmentKind),
+    String(StrTendril),
+    Other(StrTendril),
 }
 
 pub struct Slicer {
@@ -254,6 +281,15 @@ impl Slicer {
         self.length = 0;
     }
 
+    pub fn jump_back_by(&mut self, offset: u32) {
+        if offset > self.offset {
+            self.offset = 0;
+        } else {
+            self.offset -= offset;
+        }
+        self.length = 0;
+    }
+
     pub fn skip_whitespace(&mut self) {
         while let Some(c) = self.next() {
             if !(c as char).is_whitespace() {
@@ -308,5 +344,110 @@ impl Slicer {
         self.discard();
         
         true
+    }
+}
+
+struct Tokenizer<'a> {
+    source: &'a mut Slicer,
+}
+
+impl<'a> Tokenizer<'a> {
+    fn new(source: &mut Slicer) -> Tokenizer {
+        Tokenizer {
+            source: source
+        }
+    }
+}
+
+impl<'a> Iterator for Tokenizer<'a> {
+    type Item = Token;
+
+    fn next(&mut self) -> Option<Token> {
+        self.source.skip_whitespace();
+
+        match self.source.next_char() {
+            Some('.') => {
+                self.source.discard();
+                Some(Token::Period)
+            },
+            Some('(') => {
+                self.source.discard();
+                Some(Token::OpenParen)
+            },
+            Some(')') => {
+                self.source.discard();
+                Some(Token::CloseParen)
+            },
+            Some('"') => {
+                let mut escaped = false;
+                let mut skip_last = false;
+                self.source.discard();
+
+                while let Some(next) = self.source.next_char() {
+                    match next {
+                        '\\' => {
+                            self.source.next_char();
+                            escaped = true;
+                        },
+                        '"' => {
+                            skip_last = true;
+                            break;
+                        },
+                        _ => {},
+                    }
+                }
+
+                let content = if skip_last {
+                    self.source.slice_excluding(1)
+                } else {
+                    self.source.slice()
+                };
+
+                if escaped {
+                    let mut buffer = String::with_capacity(content.len());
+                    let mut chars = content.chars();
+                    while let Some(next) = chars.next() {
+                        match next {
+                            '\\' => if let Some(next) = chars.next() { buffer.push(next) },
+                            next => buffer.push(next),
+                        }
+                    }
+                    Some(Token::String(buffer.into()))
+                } else {
+                    Some(Token::String(content))
+                }
+            },
+            Some(c) => {
+                if c == '}' && self.source.eat(b'}') {
+                    self.source.jump_back_by(2);
+                    None
+                } else {
+                    let mut is_ident = c.is_alphabetic() || c == '_';
+                    let token = self.source.take_while(|c| {
+                        let c = c as char; //not necessarily optimal
+                        if !is_delimiter(c) && !c.is_whitespace() {
+                            is_ident = is_ident && (c.is_alphabetic() || c.is_numeric() || c == '_');
+                            true
+                        } else {
+                            false
+                        }
+                    });
+
+                    token.map(|t| if is_ident {
+                        Token::Ident(t)
+                    } else {
+                        Token::Other(t)
+                    })
+                }
+            },
+            None => None 
+        }
+    }
+}
+
+fn is_delimiter(c: char) -> bool {
+    match c {
+        '.' | ':' | ',' | ';' | '(' | ')' | '[' | ']' | '{' | '}' => true,
+        _ => false,
     }
 }
