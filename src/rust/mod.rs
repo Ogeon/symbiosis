@@ -445,16 +445,11 @@ impl<S> fmt::Display for Sanitized<S> where S: AsRef<str> {
     fn fmt(&self, f: &mut fmt::Formatter) ->  fmt::Result {
         for c in self.0.as_ref().chars() {
             match c {
-                //'&' => try!(f.write_str("&amp;")),
-                '<' => try!(f.write_str("&lt;")),
-                '>' => try!(f.write_str("&gt;")),
-                //'"' => try!(f.write_str("&quot;")),
                 '"' => try!(f.write_str("\\\"")),
                 '\n' => try!(f.write_str("\\n")),
                 '\t' => try!(f.write_str("\\t")),
-                //'{' => try!(f.write_str("&#123;")),
+                '\\' => try!(f.write_str("\\\\")),
                 '{' => try!(f.write_str("{{")),
-                //'}' => try!(f.write_str("&#125;")),
                 '}' => try!(f.write_str("}}")),
                 c => try!(f.write_char(c))
             }
