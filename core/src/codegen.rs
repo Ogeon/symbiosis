@@ -6,13 +6,68 @@ use tendril::StrTendril;
 use string_cache::atom::Atom;
 use html5ever::tokenizer::Doctype;
 
+#[derive(Clone, Debug)]
+pub enum Name {
+    Atom(Atom),
+    Str(&'static str),
+    Tendril(StrTendril),
+}
+
+impl From<Atom> for Name {
+    fn from(atom: Atom) -> Name {
+        Name::Atom(atom)
+    }
+}
+
+impl From<&'static str> for Name {
+    fn from(string: &'static str) -> Name {
+        Name::Str(string)
+    }
+}
+
+impl From<StrTendril> for Name {
+    fn from(tendril: StrTendril) -> Name {
+        Name::Tendril(tendril)
+    }
+}
+
+impl From<String> for Name {
+    fn from(string: String) -> Name {
+        Name::Tendril(string.into())
+    }
+}
+
+impl Deref for Name {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        match *self {
+            Name::Atom(ref a) => a,
+            Name::Str(s) => s,
+            Name::Tendril(ref t) => t,
+        }
+    }
+}
+
+impl fmt::Display for Name {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        (**self).fmt(f)
+    }
+}
+
+impl AsRef<str> for Name {
+    fn as_ref(&self) -> &str {
+        self
+    }
+}
+
 ///Tokens representing different parts of a template document.
 pub enum Token {
     SetDoctype(Doctype),
-    BeginTag(Atom),
+    BeginTag(Name),
     EndTag(bool),
-    CloseTag(Atom),
-    BeginAttribute(Atom, Content),
+    CloseTag(Name),
+    BeginAttribute(Name, Content),
     AppendToAttribute(Content),
     EndAttribute,
     Text(Content),

@@ -45,7 +45,7 @@ impl<'a, K: Hash + Eq, V> ExtensibleMap<'a, K, V> {
     pub fn new() -> ExtensibleMap<'a, K, V> {
         ExtensibleMap::Owned(HashMap::new())
     }
-    
+
     pub fn extend(base: &'a HashMap<K, V>) -> ExtensibleMap<'a, K, V> {
         ExtensibleMap::Extended(base, HashMap::new())
     }
@@ -138,7 +138,7 @@ fn parse_fragment(content: &mut Slicer, fragments: &ExtensibleMap<&'static str, 
         } else if &*name == "end" {
             Ok(ReturnType::End)
         } else if name.len() > 0 {
-            let mut path: Vec<_> = name.split('.').map(From::from).collect();
+            let path: Vec<_> = name.split('.').map(From::from).collect();
             Ok(ReturnType::Placeholder(path.into(), ContentType::String(false)))
         } else {
             Err("empty fragment".into())

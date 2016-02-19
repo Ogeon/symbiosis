@@ -3,7 +3,7 @@ use std::fmt;
 
 use tendril::StrTendril;
 
-use codegen::{Scope, Logic, ContentType, Path};
+use codegen::{Scope, Logic, ContentType, Path, Name};
 
 #[macro_use]
 pub mod pattern;
@@ -100,6 +100,13 @@ impl Error {
         }
     }
 
+    pub fn expected_string(but_found: Option<pattern::Argument>) -> Error {
+        Error {
+            callstack: vec![],
+            kind: ErrorKind::UnexpectedArgument(ArgumentKind::String, but_found)
+        }
+    }
+
     pub fn expected_optional(but_found: Option<pattern::Argument>) -> Error {
         Error {
             callstack: vec![],
@@ -160,7 +167,8 @@ impl<T: Into<Cow<'static, str>>> From<T> for Error {
 enum ArgumentKind {
     Input,
     Optional,
-    Repeated
+    Repeated,
+    String,
 }
 
 impl fmt::Display for ArgumentKind {
@@ -168,7 +176,8 @@ impl fmt::Display for ArgumentKind {
         match *self {
             ArgumentKind::Input => f.write_str("input"),
             ArgumentKind::Optional => f.write_str("an optional pattern"),
-            ArgumentKind::Repeated => f.write_str("a repeated pattern")
+            ArgumentKind::Repeated => f.write_str("a repeated pattern"),
+            ArgumentKind::String => f.write_str("a string literal"),
         }
     }
 }
@@ -236,7 +245,13 @@ pub enum ReturnType {
     ///The beginning of a scope.
     Scope(Scope),
     ///The end of a scope.
-    End
+    End,
+    ///An HTML tag tree.
+    Tag {
+        name: Name,
+        arguments: Vec<(Name, Vec<ReturnType>)>,
+        content: Option<Vec<ReturnType>>,
+    },
 }
 
 ///Things that can be sent into fragments.

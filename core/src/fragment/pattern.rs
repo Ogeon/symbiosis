@@ -47,6 +47,10 @@ macro_rules! __symbiosis_build_pattern_internal {
         $pattern.push($crate::fragment::pattern::Component::Input);
         __symbiosis_build_pattern_internal!($pattern, $($rest)*);
     });
+    ($pattern: ident, string $($rest: tt)*) => ({
+        $pattern.push($crate::fragment::pattern::Component::String);
+        __symbiosis_build_pattern_internal!($pattern, $($rest)*);
+    });
     ($pattern: ident, ($($inner: tt)*) ? $($rest: tt)*) => ({
         let mut inner_pattern = $crate::fragment::pattern::Pattern::new();
         __symbiosis_build_pattern_internal!(inner_pattern, $($inner)*);
@@ -113,6 +117,10 @@ macro_rules! __symbiosis_build_annotated_pattern_internal {
     });
     ($pattern: ident, $field: ident : input $($rest: tt)*) => ({
         $pattern.push($crate::fragment::pattern::Component::Input);
+        __symbiosis_build_annotated_pattern_internal!($pattern, $($rest)*);
+    });
+    ($pattern: ident, $field: ident : string $($rest: tt)*) => ({
+        $pattern.push($crate::fragment::pattern::Component::String);
         __symbiosis_build_annotated_pattern_internal!($pattern, $($rest)*);
     });
     ($pattern: ident, $field: ident : ($ty: ident { $($inner: tt)* }) ? $($rest: tt)*) => ({
@@ -276,14 +284,30 @@ macro_rules! __symbiosis_build_pattern_types_internal {
     ($input: ident $name: ident {$($field: ident : $ty: ty),*} {$($read_field: ident: $read_expr: expr;)*} [ $($definitions: tt)* ] $new_field: ident : input $($rest: tt)*) => (
         __symbiosis_build_pattern_types_internal!(
             $input $name {$($field: $ty,)* $new_field: $crate::fragment::InputType}
-            { 
+            {
                 $($read_field: $read_expr;)*
                 $new_field: match $input.next() {
                     Some(arg) => try!(
                         arg.into_input().map_err(|e| $crate::fragment::Error::expected_input(Some(e)))
                     ),
                     None => return Err($crate::fragment::Error::expected_input(None))
-                }; 
+                };
+            }
+            [ $($definitions)* ]
+            $($rest)*
+        );
+    );
+    ($input: ident $name: ident {$($field: ident : $ty: ty),*} {$($read_field: ident: $read_expr: expr;)*} [ $($definitions: tt)* ] $new_field: ident : string $($rest: tt)*) => (
+        __symbiosis_build_pattern_types_internal!(
+            $input $name {$($field: $ty,)* $new_field: $crate::fragment::InputType}
+            {
+                $($read_field: $read_expr;)*
+                $new_field: match $input.next() {
+                    Some(arg) => try!(
+                        arg.into_string().map_err(|e| $crate::fragment::Error::expected_string(Some(e)))
+                    ),
+                    None => return Err($crate::fragment::Error::expected_string(None))
+                };
             }
             [ $($definitions)* ]
             $($rest)*
@@ -394,7 +418,7 @@ impl Pattern {
                                     e
                                 })
                             } else {
-                                let mut path: Vec<_> = path.split('.').map(From::from).collect();
+                                let path: Vec<_> = path.split('.').map(From::from).collect();
                                 Ok(Argument::Input(InputType::Placeholder(path.into(), ContentType::String(false))))
                             }
                         } else {
@@ -404,7 +428,31 @@ impl Pattern {
                                 Err("expected an identifier".into())
                             }
                         }
-                    }
+                    },
+                    Component::String => {
+                        src.skip_whitespace();
+                        if src.eat(b'"') {
+                            if let Some(string) = src.take_while(|c| c != b'"') {
+                                if !src.eat(b'"') {
+                                    Err("expected \" at the end of a string".into())
+                                } else {
+                                    Ok(Argument::String(string))
+                                }
+                            } else {
+                                if src.eat(b'"') {
+                                    Ok(Argument::String("".into()))
+                                } else {
+                                    Err("expected \" at the end of a string".into())
+                                }
+                            }
+                        } else {
+                            if let Some(c) = src.next_char() {
+                                Err(format!("expected a string, but found {}", c).into())
+                            } else {
+                                Err("expected a string".into())
+                            }
+                        }
+                    },
                 };
 
                 match res {
@@ -440,7 +488,9 @@ pub enum Component {
     ///Expect an optional pattern.
     Optional(Pattern),
     ///Expect an input.
-    Input
+    Input,
+    ///Expect a string litteral.
+    String,
 }
 
 ///The output from a parsed `Pattern`.
@@ -450,7 +500,8 @@ pub enum Argument {
     Token(Cow<'static, str>),
     Repeat(Vec<Vec<Argument>>),
     Optional(Option<Vec<Argument>>),
-    Input(InputType)
+    Input(InputType),
+    String(StrTendril),
 }
 
 impl Argument {
@@ -481,6 +532,13 @@ impl Argument {
             other => Err(other)
         }
     }
+
+    pub fn into_string(self) -> Result<StrTendril, Argument> {
+        match self {
+            Argument::String(s) => Ok(s),
+            other => Err(other)
+        }
+    }
 }
 
 impl fmt::Debug for Argument {
@@ -490,7 +548,8 @@ impl fmt::Debug for Argument {
             Argument::Repeat(ref r) => r.fmt(f),
             Argument::Optional(None) => "(opt) nothing".fmt(f),
             Argument::Optional(Some(ref p)) => write!(f, "(opt) {:?}", p),
-            Argument::Input(ref i) => i.fmt(f)
+            Argument::Input(ref i) => i.fmt(f),
+            Argument::String(ref s) => s.fmt(f),
         }
     }
 }

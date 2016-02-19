@@ -230,7 +230,7 @@ impl<'a> Codegen for JavaScript<'a> {
 
             let mut tags = vec!["root".to_owned()];
             let mut text: Vec<Option<(String, TextState)>> = vec![None];
-            let mut attribute_var = (atom!(""), String::new());
+            let mut attribute_var = ("".into(), String::new());
             let mut var_counter = 0u32;
             let mut scopes = vec![];
 

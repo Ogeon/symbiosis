@@ -14,7 +14,7 @@ use html5ever::tokenizer::Token as HtmlToken;
 
 use string_cache::Atom;
 
-use codegen::{Token, Content};
+use codegen::{Token, Content, Name};
 use parser::ExtensibleMap;
 use fragment::{Fragment, ReturnType};
 
@@ -89,13 +89,14 @@ impl<T: TokenSink> Tokenizer<T> {
 
     fn add_text(&mut self, text: StrTendril) -> Result<(), parser::Error> {
         for ret in try!(parser::parse_content(text, self.sink.fragments())) {
-            self.sink.process_token(match ret {
-                ReturnType::String(text) => Token::Text(Content::String(text)),
-                ReturnType::Placeholder(path, ty) => Token::Text(Content::Placeholder(path, ty)),
+            match ret {
+                ReturnType::String(text) => self.sink.process_token(Token::Text(Content::String(text))),
+                ReturnType::Placeholder(path, ty) => self.sink.process_token(Token::Text(Content::Placeholder(path, ty))),
                 ReturnType::Logic(_) => return Err("logic can not be used as text".into()),
-                ReturnType::Scope(scope) => Token::Scope(scope),
-                ReturnType::End => Token::End,
-            });
+                ReturnType::Scope(scope) => self.sink.process_token(Token::Scope(scope)),
+                ReturnType::End => self.sink.process_token(Token::End),
+                ReturnType::Tag { name, arguments, content } => try!(self.add_tag_tree(name, arguments, content)),
+            };
         }
 
         Ok(())
@@ -103,25 +104,26 @@ impl<T: TokenSink> Tokenizer<T> {
 
     fn open_tag(&mut self, name: Atom, attributes: Vec<Attribute>, self_closing: bool) -> Result<(), parser::Error> {
         let void = is_void(&name);
-        self.sink.process_token(Token::BeginTag(name));
+        self.sink.process_token(Token::BeginTag(name.into()));
 
         for attribute in attributes {
             let mut content = try!(parser::parse_content(attribute.value, self.sink.fragments())).into_iter();
             match content.next() {
-                Some(ReturnType::String(text)) => self.sink.process_token(Token::BeginAttribute(attribute.name.local, Content::String(text))),
+                Some(ReturnType::String(text)) => self.sink.process_token(Token::BeginAttribute(attribute.name.local.into(), Content::String(text))),
                 Some(ReturnType::Placeholder(name, ty)) => {
-                    self.sink.process_token(Token::BeginAttribute(attribute.name.local, Content::Placeholder(name, ty)));
+                    self.sink.process_token(Token::BeginAttribute(attribute.name.local.into(), Content::Placeholder(name, ty)));
                 },
                 Some(ReturnType::Logic(_)) => return Err("logic can not be used as text".into()),
                 Some(ReturnType::Scope(scope)) => {
-                    self.sink.process_token(Token::BeginAttribute(attribute.name.local, Content::String(StrTendril::new())));
+                    self.sink.process_token(Token::BeginAttribute(attribute.name.local.into(), Content::String(StrTendril::new())));
                     self.sink.process_token(Token::Scope(scope));
                 },
                 Some(ReturnType::End) => {
                     self.sink.process_token(Token::End);
-                    self.sink.process_token(Token::BeginAttribute(attribute.name.local, Content::String(StrTendril::new())));
+                    self.sink.process_token(Token::BeginAttribute(attribute.name.local.into(), Content::String(StrTendril::new())));
                 },
-                None => self.sink.process_token(Token::BeginAttribute(attribute.name.local, Content::String(StrTendril::new())))
+                Some(ReturnType::Tag { .. }) => return Err("HTML tags can not be used as pure text".into()),
+                None => self.sink.process_token(Token::BeginAttribute(attribute.name.local.into(), Content::String(StrTendril::new())))
             }
 
             for ret in content {
@@ -131,6 +133,7 @@ impl<T: TokenSink> Tokenizer<T> {
                     ReturnType::Logic(_) => return Err("logic can not be used as text".into()),
                     ReturnType::Scope(scope) => self.sink.process_token(Token::Scope(scope)),
                     ReturnType::End => self.sink.process_token(Token::End),
+                    ReturnType::Tag { .. } => return Err("HTML tags can not be used as pure text".into()),
                 }
             }
 
@@ -143,7 +146,69 @@ impl<T: TokenSink> Tokenizer<T> {
     }
 
     fn close_tag(&mut self, name: Atom) {
-        self.sink.process_token(Token::CloseTag(name));
+        self.sink.process_token(Token::CloseTag(name.into()));
+    }
+
+    fn add_tag_tree(&mut self, name: Name, arguments: Vec<(Name, Vec<ReturnType>)>, content: Option<Vec<ReturnType>>) -> Result<(), parser::Error> {
+        let void = is_void(&name);
+        self.sink.process_token(Token::BeginTag(name.clone()));
+
+        for (attr, content) in arguments {
+            let mut content = content.into_iter();
+            match content.next() {
+                Some(ReturnType::String(text)) => self.sink.process_token(Token::BeginAttribute(attr, Content::String(text))),
+                Some(ReturnType::Placeholder(name, ty)) => {
+                    self.sink.process_token(Token::BeginAttribute(attr, Content::Placeholder(name, ty)));
+                },
+                Some(ReturnType::Logic(_)) => return Err("logic can not be used as text".into()),
+                Some(ReturnType::Scope(scope)) => {
+                    self.sink.process_token(Token::BeginAttribute(attr, Content::String(StrTendril::new())));
+                    self.sink.process_token(Token::Scope(scope));
+                },
+                Some(ReturnType::End) => {
+                    self.sink.process_token(Token::End);
+                    self.sink.process_token(Token::BeginAttribute(attr, Content::String(StrTendril::new())));
+                },
+                Some(ReturnType::Tag { .. }) => return Err("HTML tags can not be used as pure text".into()),
+                None => self.sink.process_token(Token::BeginAttribute(attr, Content::String(StrTendril::new())))
+            }
+
+            for ret in content {
+                match ret {
+                    ReturnType::String(text) => self.sink.process_token(Token::AppendToAttribute(Content::String(text))),
+                    ReturnType::Placeholder(name, ty) => self.sink.process_token(Token::AppendToAttribute(Content::Placeholder(name, ty))),
+                    ReturnType::Logic(_) => return Err("logic can not be used as text".into()),
+                    ReturnType::Scope(scope) => self.sink.process_token(Token::Scope(scope)),
+                    ReturnType::End => self.sink.process_token(Token::End),
+                    ReturnType::Tag { .. } => return Err("HTML tags can not be used as pure text".into()),
+                }
+            }
+            self.sink.process_token(Token::EndAttribute);
+        }
+
+        self.sink.process_token(Token::EndTag(void | content.is_none()));
+
+        if let Some(content) = content {
+            if void {
+                return Err(format!("{} tags are not supposed to have any content", name).into());
+            }
+
+            for ret in content {
+                match ret {
+                    ReturnType::String(text) => self.sink.process_token(Token::Text(Content::String(text))),
+                    ReturnType::Placeholder(path, ty) => self.sink.process_token(Token::Text(Content::Placeholder(path, ty))),
+                    ReturnType::Logic(_) => return Err("logic can not be used as text".into()),
+                    ReturnType::Scope(scope) => self.sink.process_token(Token::Scope(scope)),
+                    ReturnType::End => self.sink.process_token(Token::End),
+                    ReturnType::Tag { name, arguments, content } => try!(self.add_tag_tree(name, arguments, content)),
+                }
+            }
+
+
+            self.sink.process_token(Token::CloseTag(name));
+        }
+
+        Ok(())
     }
 }
 
