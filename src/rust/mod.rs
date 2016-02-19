@@ -192,7 +192,7 @@ impl<'a> Codegen for Rust<'a> {
                                     try_w_s!(string_buf, " {}=\\\"", name);
                                     try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
 
-                                    try_w!(func, "if let Some(val) = {} {{", access_path);
+                                    try_w!(func, "if let Some(ref val) = {} {{", access_path);
 
                                     try_w!(func.indented_line(), "try!(write!(writer, \"{{}}\", val));");
                                     try_w!(func, "}}");
@@ -215,7 +215,7 @@ impl<'a> Codegen for Rust<'a> {
                                 },
                                 Some((access_path, Some((&ContentType::String(_), true)))) => {
                                     try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
-                                    try_w!(func, "if let Some(val) = {} {{", access_path);
+                                    try_w!(func, "if let Some(ref val) = {} {{", access_path);
                                     try_w!(func.indented_line(), "try!(write!(writer, \"{{}}\", val));");
                                     try_w!(func, "}}");
                                 },
