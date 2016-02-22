@@ -12,10 +12,11 @@ pub use tendril::StrTendril;
 use html5ever::Attribute;
 use html5ever::tokenizer::{Tag, TagKind, Doctype};
 use html5ever::tokenizer::Token as HtmlToken;
+use html5ever::tokenizer::states::{State, ScriptData, Rcdata, Rawtext};
 
 use string_cache::Atom;
 
-use codegen::{Token, Content, Name};
+use codegen::{Token, Content, Name, Text};
 use parser::ExtensibleMap;
 use fragment::{Fragment, ReturnType};
 
@@ -61,6 +62,8 @@ impl fmt::Display for Error {
 pub struct Tokenizer<T: TokenSink> {
     sink: T,
     errors: Vec<parser::Error>,
+    parser_state: Option<State>,
+    escape: bool,
 }
 
 impl<T: TokenSink> Tokenizer<T> {
@@ -68,6 +71,8 @@ impl<T: TokenSink> Tokenizer<T> {
         Tokenizer {
             sink: sink,
             errors: vec![],
+            parser_state: None,
+            escape: true,
         }
     }
 
@@ -88,10 +93,14 @@ impl<T: TokenSink> Tokenizer<T> {
         self.sink.process_token(Token::SetDoctype(docktype));
     }
 
+    fn add_comment(&mut self, comment: StrTendril) {
+        self.sink.process_token(Token::Comment(comment));
+    }
+
     fn add_text(&mut self, text: StrTendril) -> Result<(), parser::Error> {
         for ret in try!(parser::parse_content(text, self.sink.fragments())) {
             match ret {
-                ReturnType::String(text) => self.sink.process_token(Token::Text(Content::String(text))),
+                ReturnType::String(text) => self.sink.process_token(Token::Text(Content::String(Text::new(text, self.escape, false)))),
                 ReturnType::Placeholder(path, ty) => self.sink.process_token(Token::Text(Content::Placeholder(path, ty))),
                 ReturnType::Logic(_) => return Err("logic can not be used as text".into()),
                 ReturnType::Scope(scope) => self.sink.process_token(Token::Scope(scope)),
@@ -104,32 +113,31 @@ impl<T: TokenSink> Tokenizer<T> {
     }
 
     fn open_tag(&mut self, name: Atom, attributes: Vec<Attribute>, self_closing: bool) -> Result<(), parser::Error> {
-        let void = is_void(&name);
-        self.sink.process_token(Token::BeginTag(name.into()));
+        self.sink.process_token(Token::BeginTag(name.clone().into()));
 
         for attribute in attributes {
             let mut content = try!(parser::parse_content(attribute.value, self.sink.fragments())).into_iter();
             match content.next() {
-                Some(ReturnType::String(text)) => self.sink.process_token(Token::BeginAttribute(attribute.name.local.into(), Content::String(text))),
+                Some(ReturnType::String(text)) => self.sink.process_token(Token::BeginAttribute(attribute.name.local.into(), Content::String(Text::escaped(text, true)))),
                 Some(ReturnType::Placeholder(name, ty)) => {
                     self.sink.process_token(Token::BeginAttribute(attribute.name.local.into(), Content::Placeholder(name, ty)));
                 },
                 Some(ReturnType::Logic(_)) => return Err("logic can not be used as text".into()),
                 Some(ReturnType::Scope(scope)) => {
-                    self.sink.process_token(Token::BeginAttribute(attribute.name.local.into(), Content::String(StrTendril::new())));
+                    self.sink.process_token(Token::BeginAttribute(attribute.name.local.into(), Content::String(Text::empty())));
                     self.sink.process_token(Token::Scope(scope));
                 },
                 Some(ReturnType::End) => {
                     self.sink.process_token(Token::End);
-                    self.sink.process_token(Token::BeginAttribute(attribute.name.local.into(), Content::String(StrTendril::new())));
+                    self.sink.process_token(Token::BeginAttribute(attribute.name.local.into(), Content::String(Text::empty())));
                 },
                 Some(ReturnType::Tag { .. }) => return Err("HTML tags can not be used as pure text".into()),
-                None => self.sink.process_token(Token::BeginAttribute(attribute.name.local.into(), Content::String(StrTendril::new())))
+                None => self.sink.process_token(Token::BeginAttribute(attribute.name.local.into(), Content::String(Text::empty())))
             }
 
             for ret in content {
                 match ret {
-                    ReturnType::String(text) => self.sink.process_token(Token::AppendToAttribute(Content::String(text))),
+                    ReturnType::String(text) => self.sink.process_token(Token::AppendToAttribute(Content::String(Text::escaped(text, true)))),
                     ReturnType::Placeholder(name, ty) => self.sink.process_token(Token::AppendToAttribute(Content::Placeholder(name, ty))),
                     ReturnType::Logic(_) => return Err("logic can not be used as text".into()),
                     ReturnType::Scope(scope) => self.sink.process_token(Token::Scope(scope)),
@@ -141,42 +149,56 @@ impl<T: TokenSink> Tokenizer<T> {
             self.sink.process_token(Token::EndAttribute);
         }
 
-        self.sink.process_token(Token::EndTag(void || self_closing));
+        self.sink.process_token(Token::EndTag(self_closing));
+
+        if !self_closing {
+            self.parser_state = match &*name {
+                "script" => Some(State::RawData(ScriptData)),
+                "title" | "style" | "plaintext" | "listing" | "pre" | "xmp" | "iframe" | "noembed" | "noframes" => Some(State::RawData(Rawtext)),
+                "textarea" => Some(State::RawData(Rcdata)),
+                _ => None,
+            };
+
+            self.escape = match &*name {
+                "style" | "script" | "xmp" | "iframe" | "noembed" | "noframes" | "plaintext" => false,
+                _ => true
+            };
+        }
 
         Ok(())
     }
 
     fn close_tag(&mut self, name: Atom) {
         self.sink.process_token(Token::CloseTag(name.into()));
+        self.escape = true;
     }
 
     fn add_tag_tree(&mut self, name: Name, arguments: Vec<(Name, Vec<ReturnType>)>, content: Option<Vec<ReturnType>>) -> Result<(), parser::Error> {
-        let void = is_void(&name);
         self.sink.process_token(Token::BeginTag(name.clone()));
 
         for (attr, content) in arguments {
             let mut content = content.into_iter();
             match content.next() {
-                Some(ReturnType::String(text)) => self.sink.process_token(Token::BeginAttribute(attr, Content::String(text))),
+                Some(ReturnType::String(text)) => self.sink.process_token(Token::BeginAttribute(attr, Content::String(Text::escaped(text, true)))),
                 Some(ReturnType::Placeholder(name, ty)) => {
                     self.sink.process_token(Token::BeginAttribute(attr, Content::Placeholder(name, ty)));
                 },
                 Some(ReturnType::Logic(_)) => return Err("logic can not be used as text".into()),
                 Some(ReturnType::Scope(scope)) => {
-                    self.sink.process_token(Token::BeginAttribute(attr, Content::String(StrTendril::new())));
+                    self.sink.process_token(Token::BeginAttribute(attr, Content::String(Text::empty())));
                     self.sink.process_token(Token::Scope(scope));
                 },
                 Some(ReturnType::End) => {
                     self.sink.process_token(Token::End);
-                    self.sink.process_token(Token::BeginAttribute(attr, Content::String(StrTendril::new())));
+                    self.sink.process_token(Token::BeginAttribute(attr, Content::String(Text::empty())));
                 },
                 Some(ReturnType::Tag { .. }) => return Err("HTML tags can not be used as pure text".into()),
-                None => self.sink.process_token(Token::BeginAttribute(attr, Content::String(StrTendril::new())))
+                None => self.sink.process_token(Token::BeginAttribute(attr, Content::String(Text::empty())))
             }
 
             for ret in content {
                 match ret {
-                    ReturnType::String(text) => self.sink.process_token(Token::AppendToAttribute(Content::String(text))),
+                    ReturnType::String(text) => self.sink.process_token(Token::AppendToAttribute(Content::String(Text::escaped(text, true)))),
                     ReturnType::Placeholder(name, ty) => self.sink.process_token(Token::AppendToAttribute(Content::Placeholder(name, ty))),
                     ReturnType::Logic(_) => return Err("logic can not be used as text".into()),
                     ReturnType::Scope(scope) => self.sink.process_token(Token::Scope(scope)),
@@ -187,16 +209,25 @@ impl<T: TokenSink> Tokenizer<T> {
             self.sink.process_token(Token::EndAttribute);
         }
 
-        self.sink.process_token(Token::EndTag(void | content.is_none()));
+        self.sink.process_token(Token::EndTag(content.is_none()));
+
+        let escape = if content.is_some() {
+            match &*name {
+                "style" | "script" | "xmp" | "iframe" | "noembed" | "noframes" | "plaintext" => false,
+                _ => true
+            }
+        } else {
+            true
+        };
 
         if let Some(content) = content {
-            if void {
+            if is_void(&name) {
                 return Err(format!("{} tags are not supposed to have any content", name).into());
             }
 
             for ret in content {
                 match ret {
-                    ReturnType::String(text) => self.sink.process_token(Token::Text(Content::String(text))),
+                    ReturnType::String(text) => self.sink.process_token(Token::Text(Content::String(Text::new(text, escape, false)))),
                     ReturnType::Placeholder(path, ty) => self.sink.process_token(Token::Text(Content::Placeholder(path, ty))),
                     ReturnType::Logic(_) => return Err("logic can not be used as text".into()),
                     ReturnType::Scope(scope) => self.sink.process_token(Token::Scope(scope)),
@@ -234,12 +265,16 @@ impl<'a, T: TokenSink> html5ever::tokenizer::TokenSink for &'a mut Tokenizer<T> 
             },
             HtmlToken::DoctypeToken(doctype) => self.set_doctype(doctype),
 
-            HtmlToken::CommentToken(_) => {},
+            HtmlToken::CommentToken(comment) => self.add_comment(comment),
             HtmlToken::NullCharacterToken => {},
             HtmlToken::EOFToken => {},
 
             HtmlToken::ParseError(e) => self.errors.push(e.into())
         }
+    }
+
+    fn query_state_change(&mut self) -> Option<State> {
+        self.parser_state.take()
     }
 }
 

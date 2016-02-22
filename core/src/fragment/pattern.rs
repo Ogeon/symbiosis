@@ -22,7 +22,7 @@ use parser::{Input, FragmentKind};
 ///`foreach`:
 ///
 ///```
-///# #[macro_use] extern crate symbiosis;
+///# #[macro_use] extern crate symbiosis_core;
 ///# fn main() {
 ///let pattern = build_pattern!((input {"=>"})? input {"in"} input);
 ///# }
@@ -86,7 +86,7 @@ macro_rules! __symbiosis_build_pattern_internal {
 ///The same as `build_pattern!`, but for annotated patterns.
 ///
 ///```
-///# #[macro_use] extern crate symbiosis;
+///# #[macro_use] extern crate symbiosis_core;
 ///# fn main() {
 ///let pattern = build_annotated_pattern!(ForEach {
 ///    key: (Key { k: input {"=>"} })? 
@@ -169,10 +169,10 @@ macro_rules! __symbiosis_build_annotated_pattern_internal {
 /// * `{token}` - expect an arbitrary string `token`, that will be ignored when decoding.
 ///
 ///```
-///# #[macro_use] extern crate symbiosis;
+///# #[macro_use] extern crate symbiosis_core;
 ///# use std::borrow::Cow;
 ///# fn main() {}
-///# fn ex() -> Result<(), symbiosis::fragment::Error> {
+///# fn ex() -> Result<(), symbiosis_core::fragment::Error> {
 ///# let args = Vec::new();
 ///pattern_decoder!(ForEach {
 ///    key: (Key { key: input {"=>"} })?
@@ -196,10 +196,10 @@ macro_rules! __symbiosis_build_annotated_pattern_internal {
 ///```
 ///
 ///```
-///# #[macro_use] extern crate symbiosis;
+///# #[macro_use] extern crate symbiosis_core;
 ///# use std::borrow::Cow;
 ///# fn main() {}
-///# fn ex() -> Result<(), symbiosis::fragment::Error> {
+///# fn ex() -> Result<(), symbiosis_core::fragment::Error> {
 ///# let args = Vec::new();
 ///pattern_decoder!(HeadTail {
 ///    head: input

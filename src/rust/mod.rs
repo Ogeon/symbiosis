@@ -177,11 +177,12 @@ impl<'a> Codegen for Rust<'a> {
                         }
                         string_buf.push_str(">");
                     },
+                    &Token::Comment(ref comment) => try_w_s!(string_buf, "<!--{}-->", comment),
                     &Token::BeginTag(ref name) => try_w_s!(string_buf, "<{}", name),
                     &Token::EndTag(_self_close) => string_buf.push_str(">"),
                     &Token::CloseTag(ref name) => try_w_s!(string_buf, "</{}>", name),
                     &Token::BeginAttribute(ref name, ref content) => match content {
-                        &Content::String(ref content) => try_w_s!(string_buf, " {}=\\\"{}", name, content),
+                        &Content::String(ref content) => try_w_s!(string_buf, " {}=\\\"{}", name, content.to_string()),
                         &Content::Placeholder(ref placeholder, _) => {
                             match find_param(placeholder, params, &scopes) {
                                 Some((access_path, Some((&ContentType::String(_), false)))) | Some((access_path, None)) => {
@@ -206,7 +207,7 @@ impl<'a> Codegen for Rust<'a> {
                         }
                     },
                     &Token::AppendToAttribute(ref text) | &Token::Text(ref text) => match text {
-                        &Content::String(ref content) => try_w_s!(string_buf, "{}", content),
+                        &Content::String(ref content) => try_w_s!(string_buf, "{}", content.to_string()),
                         &Content::Placeholder(ref placeholder, _) => {
                             match find_param(placeholder, params, &scopes) {
                                 Some((access_path, Some((&ContentType::String(_), false)))) | Some((access_path, None)) => {

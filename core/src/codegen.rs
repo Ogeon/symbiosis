@@ -4,7 +4,7 @@ use std::ops::{Deref, DerefMut};
 
 use tendril::StrTendril;
 use string_cache::atom::Atom;
-use html5ever::tokenizer::Doctype;
+pub use html5ever::tokenizer::Doctype;
 
 #[derive(Clone, Debug)]
 pub enum Name {
@@ -71,9 +71,75 @@ impl AsRef<str> for Name {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Text {
+    content: StrTendril,
+    escape: bool,
+    in_attribute: bool,
+}
+
+impl Text {
+    pub fn new(content: StrTendril, escape: bool, in_attribute: bool) -> Text {
+        Text {
+            content: content,
+            escape: escape,
+            in_attribute: in_attribute,
+        }
+    }
+
+    pub fn escaped(content: StrTendril, in_attribute: bool) -> Text {
+        Text {
+            content: content,
+            escape: true,
+            in_attribute: in_attribute,
+        }
+    }
+
+    pub fn plain(content: StrTendril) -> Text {
+        Text {
+            content: content,
+            escape: false,
+            in_attribute: false,
+        }
+    }
+
+    pub fn empty() -> Text {
+        Text {
+            content: StrTendril::new(),
+            escape: false,
+            in_attribute: false,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.content.len() == 0
+    }
+}
+
+impl fmt::Display for Text {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self.escape {
+            for c in self.content.chars() {
+                try!(match c {
+                    '&' => "&amp;".fmt(f),
+                    '\u{00A0}' => "&nbsp;".fmt(f),
+                    '"' if self.in_attribute => "&quot;".fmt(f),
+                    '<' if !self.in_attribute => "&lt;".fmt(f),
+                    '>' if !self.in_attribute => "&gt;".fmt(f),
+                    c => write!(f, "{}", c),
+                });
+            }
+            Ok(())
+        } else {
+            self.content.fmt(f)
+        }
+    }
+}
+
 ///Tokens representing different parts of a template document.
 pub enum Token {
     SetDoctype(Doctype),
+    Comment(StrTendril),
     BeginTag(Name),
     EndTag(bool),
     CloseTag(Name),
@@ -88,7 +154,7 @@ pub enum Token {
 ///Types of text content.
 pub enum Content {
     ///A plain string.
-    String(StrTendril),
+    String(Text),
 
     ///Use content from a parameter in a placeholder.
     Placeholder(Path, ContentType)

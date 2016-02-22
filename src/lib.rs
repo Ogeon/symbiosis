@@ -248,6 +248,7 @@ impl<'a, 'b: 'a> TokenSink for &'a mut Template<'b> {
     fn process_token(&mut self, token: Token) {
         match token {
             Token::SetDoctype(doctype) => self.tokens.push(Token::SetDoctype(doctype)),
+            Token::Comment(comment) => self.tokens.push(Token::Comment(comment)),
             Token::BeginTag(name) => self.tokens.push(Token::BeginTag(name)),
             Token::EndTag(self_close) => self.tokens.push(Token::EndTag(self_close)),
             Token::CloseTag(name) => self.tokens.push(Token::CloseTag(name)),

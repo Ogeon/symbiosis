@@ -173,6 +173,7 @@ impl<'a> Codegen for JavaScript<'a> {
         for token in tokens {
             match token {
                 &Token::SetDoctype(_) => return Err(Error::NotSupported("doctype declarations")),
+                &Token::Comment(_) => {},
                 t @ &Token::BeginTag(_) | t @ &Token::EndTag(_) | t @ &Token::CloseTag(_) => {
                     if let Some(ref mut tree) = tree_stack.last_mut() {
                         tree.inherit_text = false;
@@ -243,6 +244,7 @@ impl<'a> Codegen for JavaScript<'a> {
 
                 match token {
                     &Token::SetDoctype(_) => return Err(Error::NotSupported("doctype declarations")),
+                    &Token::Comment(_) => {},
                     &Token::BeginTag(ref name) => {
                         if let (Some(&mut Some((ref text_var, ref mut state))), Some(tag)) = (text.last_mut(), tags.last()) {
                             try!(append_text(&mut func, text_var, state, tag));
@@ -509,7 +511,7 @@ fn write_attribute<'a, W: Write>(
         &Content::String(ref content) => {
             if new {
                 try_w!(w, "var {} = \"{}\";", var, content);
-            } else if content.len() > 0 {
+            } else if !content.is_empty() {
                 try_w!(w, "{} += \"{}\";", var, content);
             }
         },
@@ -552,8 +554,8 @@ fn write_text<'a, W: Write>(
     scopes: &[Option<(&'a str, String, &'a ContentType, Option<(StrTendril, String)>)>]
 ) -> Result<(), Error> {
     match content {
-        &Content::String(ref content) => if content.len() > 0 {
-            try_w!(w, "{} += \"{}\";", var, Sanitized(content));
+        &Content::String(ref content) => if !content.is_empty() {
+            try_w!(w, "{} += \"{}\";", var, Sanitized(content.to_string()));
             *state = TextState::HasContent;
         },
         &Content::Placeholder(ref placeholder, _) => {
