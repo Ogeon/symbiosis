@@ -1,0 +1,13 @@
+[package]
+name = "symbiosis_dynamic"
+version = "0.0.1"
+authors = ["Erik Hedvall <hello@erikhedvall.nu>"]
+
+[lib]
+name = "symbiosis_dynamic"
+
+[dependencies]
+serde_json = "0.6"
+
+[dependencies.symbiosis_tokenizer]
+path = "../tokenizer"
