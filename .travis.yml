@@ -5,7 +5,27 @@ os:
 script:
   - cargo build -v
   - cargo test -v
-  - cd rust
+  - cd core
+  - cargo build -v
+  - cargo test -v
+  - cargo doc
+  - mv target/doc ../target/doc
+  - cd ../pattern
+  - cargo build -v
+  - cargo test -v
+  - cargo doc
+  - mv target/doc ../target/doc
+  - cd ../tokenizer
+  - cargo build -v
+  - cargo test -v
+  - cargo doc
+  - mv target/doc ../target/doc
+  - cd ../dynamic
+  - cargo build -v
+  - cargo test -v
+  - cargo doc
+  - mv target/doc ../target/doc
+  - cd ../rust
   - cargo build -v
   - cargo test -v
   - cargo doc
