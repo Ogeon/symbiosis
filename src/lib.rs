@@ -1,6 +1,3 @@
-extern crate html5ever;
-#[macro_use]
-extern crate string_cache;
 extern crate symbiosis_tokenizer;
 
 use std::path;

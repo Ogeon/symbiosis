@@ -2,14 +2,11 @@
 //since the purpose of Symbiosis is to recreate the original document as
 //closely as possible.
 
-extern crate tendril;
 extern crate symbiosis_tokenizer;
 
 use std::collections::HashMap;
 
-use tendril::{StrTendril, SliceExt};
-
-use symbiosis_tokenizer::{Tokenizer, TokenSink};
+use symbiosis_tokenizer::{Tokenizer, TokenSink, StrTendril};
 use symbiosis_tokenizer::codegen::{Token, Content};
 use symbiosis_tokenizer::fragment::{Fragment, FragmentStore};
 
@@ -86,7 +83,7 @@ macro_rules! test {
     ($name:ident, $input:expr, $output:expr) => {
         #[test]
         fn $name() {
-            assert_eq!($output, &*parse_and_serialize($input.to_tendril()));
+            assert_eq!($output, &*parse_and_serialize($input.into()));
         }
     };
 
