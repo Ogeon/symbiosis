@@ -3,35 +3,25 @@ os:
   - linux
   - osx
 script:
-  - cargo build -v
-  - cargo test -v
-  - cd core
-  - cargo build -v
-  - cargo test -v
+  - cargo test
   - cargo doc
-  - mv target/doc ../target/doc
-  - cd ../pattern
-  - cargo build -v
-  - cargo test -v
+  - cd pattern
+  - cargo test
   - cargo doc
-  - rsync -av target/doc/* ../target/doc
+  - rsync -avq target/doc/* ../target/doc
   - cd ../tokenizer
-  - cargo build -v
-  - cargo test -v
+  - cargo test
   - cargo doc
-  - rsync -av target/doc/* ../target/doc
+  - rsync -avq target/doc/* ../target/doc
   - cd ../dynamic
-  - cargo build -v
-  - cargo test -v
+  - cargo test
   - cargo doc
-  - rsync -av target/doc/* ../target/doc
+  - rsync -avq target/doc/* ../target/doc
   - cd ../rust
-  - cargo build -v
-  - cargo test -v
+  - cargo test
   - cargo doc
-  - rsync -av target/doc/* ../target/doc
+  - rsync -avq target/doc/* ../target/doc
   - cd ../example
-  - cargo build -v
+  - cargo build
   - cd ..
-  - cargo doc
 after_success: curl https://raw.githubusercontent.com/ogeon/travis-doc-upload/master/travis-doc-upload.sh | sh
