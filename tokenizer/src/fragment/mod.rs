@@ -1,4 +1,6 @@
-use std::borrow::Cow;
+use std::collections::HashMap;
+use std::borrow::{Cow, Borrow};
+use std::hash::Hash;
 use std::fmt;
 
 use StrTendril;
@@ -265,22 +267,15 @@ pub enum ReturnType {
     },
 }
 
-/*///Things that can be sent into fragments.
-pub enum InputType {
-    ///A placeholder parameter and its preferred content type.
-    Placeholder(Path, ContentType),
-    ///A logic expression.
-    Logic(Logic)
+pub trait FragmentStore {
+    fn get(&self, ident: &str) -> Option<&Fragment>;
 }
 
-impl fmt::Debug for InputType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            InputType::Placeholder(ref name, ref ty) => write!(f, "placeholder '{}' ({})", name, ty),
-            InputType::Logic(_) => f.write_str("a logic expression")
-        }
+impl<S: Hash + Eq + Borrow<str>> FragmentStore for HashMap<S, Box<Fragment>> {
+    fn get(&self, ident: &str) -> Option<&Fragment> {
+        self.get(ident).map(AsRef::as_ref)
     }
-}*/
+}
 
 impl_fragment!{
     #[doc = "Start of an `if` scope."]

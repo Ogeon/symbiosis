@@ -6,17 +6,18 @@ extern crate symbiosis_tokenizer;
 use std::path;
 use std::fs::{File, read_dir};
 use std::io::{Read, Write};
-use std::borrow::Cow;
+use std::borrow::{Cow, Borrow};
+use std::hash::Hash;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::mem::swap;
 
 pub use symbiosis_tokenizer::{fragment, Error, StrTendril};
 use symbiosis_tokenizer::{Tokenizer, TokenSink};
-use symbiosis_tokenizer::parser::{self, ExtensibleMap};
+use symbiosis_tokenizer::parser;
 
 use codegen::{Token, Content, Codegen, ContentType, Scope, Path, Params};
-use fragment::Fragment;
+use fragment::{Fragment, FragmentStore};
 
 
 #[macro_use]
@@ -293,7 +294,7 @@ impl<'a, 'b: 'a> TokenSink for &'a mut Template<'b> {
         }
     }
 
-    fn fragments(&self) -> &ExtensibleMap<&'static str, Box<Fragment>> {
+    fn fragments(&self) -> &FragmentStore {
         &self.fragments
     }
 }
@@ -317,4 +318,42 @@ fn init_fragments<'a>() -> HashMap<&'static str, Box<Fragment + 'a>> {
     map.insert(f.identifier(), Box::new(f));
 
     map
+}
+
+enum ExtensibleMap<'a, K: 'a, V: 'a> {
+    Owned(HashMap<K, V>),
+    Extended(&'a HashMap<K, V>, HashMap<K, V>)
+}
+
+impl<'a, K: Hash + Eq, V> ExtensibleMap<'a, K, V> {
+    pub fn new() -> ExtensibleMap<'a, K, V> {
+        ExtensibleMap::Owned(HashMap::new())
+    }
+
+    pub fn extend(base: &'a HashMap<K, V>) -> ExtensibleMap<'a, K, V> {
+        ExtensibleMap::Extended(base, HashMap::new())
+    }
+
+    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
+        match self {
+            &mut ExtensibleMap::Owned(ref mut map) => map.insert(key, value),
+            &mut ExtensibleMap::Extended(_, ref mut map) => map.insert(key, value),
+        }
+    }
+
+    pub fn get<Q: ?Sized>(&self, k: &Q) -> Option<&V> where
+        K: Borrow<Q>,
+        Q: Hash + Eq
+    {
+        match self {
+            &ExtensibleMap::Owned(ref map) => map.get(k),
+            &ExtensibleMap::Extended(ref base, ref map) => map.get(k).or_else(|| base.get(k))
+        }
+    }
+}
+
+impl<'a, K: Hash + Eq + Borrow<str>> FragmentStore for ExtensibleMap<'a, K, Box<Fragment>> {
+    fn get(&self, ident: &str) -> Option<&Fragment> {
+        self.get(ident).map(AsRef::as_ref)
+    }
 }

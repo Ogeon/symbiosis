@@ -1,11 +1,9 @@
-use std::collections::HashMap;
-use std::borrow::{Cow, Borrow};
-use std::hash::Hash;
+use std::borrow::Cow;
 use std::fmt;
 
 use StrTendril;
 
-use fragment::{self, Fragment, InputType, ReturnType};
+use fragment::{self, Fragment, FragmentStore, InputType, ReturnType};
 use codegen::ContentType;
 
 use lalrpop_util::ParseError as LalrpopError;
@@ -70,39 +68,7 @@ impl From<Cow<'static, str>> for Error {
     }
 }
 
-pub enum ExtensibleMap<'a, K: 'a, V: 'a> {
-    Owned(HashMap<K, V>),
-    Extended(&'a HashMap<K, V>, HashMap<K, V>)
-}
-
-impl<'a, K: Hash + Eq, V> ExtensibleMap<'a, K, V> {
-    pub fn new() -> ExtensibleMap<'a, K, V> {
-        ExtensibleMap::Owned(HashMap::new())
-    }
-
-    pub fn extend(base: &'a HashMap<K, V>) -> ExtensibleMap<'a, K, V> {
-        ExtensibleMap::Extended(base, HashMap::new())
-    }
-
-    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
-        match self {
-            &mut ExtensibleMap::Owned(ref mut map) => map.insert(key, value),
-            &mut ExtensibleMap::Extended(_, ref mut map) => map.insert(key, value),
-        }
-    }
-
-    pub fn get<Q: ?Sized>(&self, k: &Q) -> Option<&V> where
-        K: Borrow<Q>,
-        Q: Hash + Eq
-    {
-        match self {
-            &ExtensibleMap::Owned(ref map) => map.get(k),
-            &ExtensibleMap::Extended(ref base, ref map) => map.get(k).or_else(|| base.get(k))
-        }
-    }
-}
-
-pub fn parse_content(content: StrTendril, fragments: &ExtensibleMap<&'static str, Box<Fragment>>) -> Result<Vec<ReturnType>, Error> {
+pub fn parse_content(content: StrTendril, fragments: &FragmentStore) -> Result<Vec<ReturnType>, Error> {
     let mut tokens = Vec::new();
     let mut content = Slicer::new(content);
 
@@ -152,7 +118,7 @@ pub fn parse_content(content: StrTendril, fragments: &ExtensibleMap<&'static str
     Ok(tokens)
 }
 
-fn eval_fragment(fragment: &FragmentKind, fragments: &ExtensibleMap<&'static str, Box<Fragment>>) -> Result<ReturnType, fragment::Error> {
+fn eval_fragment(fragment: &FragmentKind, fragments: &FragmentStore) -> Result<ReturnType, fragment::Error> {
     match *fragment {
         FragmentKind::Function(ref name, ref args) => {
             if let Some(fragment) = fragments.get(&**name) {

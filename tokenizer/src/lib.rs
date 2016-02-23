@@ -17,8 +17,7 @@ use html5ever::tokenizer::states::{State, ScriptData, Rcdata, Rawtext};
 use string_cache::Atom;
 
 use codegen::{Token, Content, Name, Text};
-use parser::ExtensibleMap;
-use fragment::{Fragment, ReturnType};
+use fragment::{ReturnType, FragmentStore};
 
 //haxx
 mod symbiosis_tokenizer {
@@ -285,7 +284,7 @@ impl<'a, T: TokenSink> html5ever::tokenizer::TokenSink for &'a mut Tokenizer<T> 
 
 pub trait TokenSink {
     fn process_token(&mut self, token: Token);
-    fn fragments(&self) -> &ExtensibleMap<&'static str, Box<Fragment>>;
+    fn fragments(&self) -> &FragmentStore;
 }
 
 // http://www.w3.org/TR/html5/syntax.html#void-elements

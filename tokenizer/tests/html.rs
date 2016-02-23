@@ -5,16 +5,17 @@
 extern crate tendril;
 extern crate symbiosis_tokenizer;
 
+use std::collections::HashMap;
+
 use tendril::{StrTendril, SliceExt};
 
 use symbiosis_tokenizer::{Tokenizer, TokenSink};
 use symbiosis_tokenizer::codegen::{Token, Content};
-use symbiosis_tokenizer::parser::ExtensibleMap;
-use symbiosis_tokenizer::fragment::Fragment;
+use symbiosis_tokenizer::fragment::{Fragment, FragmentStore};
 
 struct Sink {
     buffer: String,
-    fragments: ExtensibleMap<'static, &'static str, Box<Fragment>>
+    fragments: HashMap<&'static str, Box<Fragment>>
 }
 
 impl<'a> TokenSink for &'a mut Sink {
@@ -64,7 +65,7 @@ impl<'a> TokenSink for &'a mut Sink {
         }
     }
 
-    fn fragments(&self) -> &ExtensibleMap<&'static str, Box<Fragment>> {
+    fn fragments(&self) -> &FragmentStore {
         &self.fragments
     }
 }
@@ -72,7 +73,7 @@ impl<'a> TokenSink for &'a mut Sink {
 fn parse_and_serialize(input: StrTendril) -> StrTendril {
     let mut sink = Sink {
         buffer: String::new(),
-        fragments: ExtensibleMap::new(),
+        fragments: HashMap::new(),
     };
     {
         let mut tokenizer = Tokenizer::new(&mut sink);
