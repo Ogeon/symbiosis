@@ -14,22 +14,22 @@ script:
   - cargo build -v
   - cargo test -v
   - cargo doc
-  - mv target/doc ../target/doc
+  - mv -u target/doc ../target/doc
   - cd ../tokenizer
   - cargo build -v
   - cargo test -v
   - cargo doc
-  - mv target/doc ../target/doc
+  - mv -u target/doc ../target/doc
   - cd ../dynamic
   - cargo build -v
   - cargo test -v
   - cargo doc
-  - mv target/doc ../target/doc
+  - mv -u target/doc ../target/doc
   - cd ../rust
   - cargo build -v
   - cargo test -v
   - cargo doc
-  - mv target/doc ../target/doc
+  - mv -u target/doc ../target/doc
   - cd ../example
   - cargo build -v
   - cd ..
