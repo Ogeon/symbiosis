@@ -1,4 +1,4 @@
-use tendril::StrTendril;
+use StrTendril;
 use super::{FragmentKind, Token, Input};
 use codegen::Path;
 

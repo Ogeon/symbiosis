@@ -9,8 +9,6 @@ build = "build.rs"
 name = "symbiosis_core"
 
 [dependencies]
-html5ever = "0.5"
-string_cache = "0.2"
 tendril = "0.2"
 lalrpop-util = "0.10"
 

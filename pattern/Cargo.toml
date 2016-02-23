@@ -1,0 +1,17 @@
+[package]
+name = "symbiosis_pattern"
+version = "0.0.1"
+authors = ["Erik Hedvall <hello@erikhedvall.nu>"]
+
+[lib]
+name = "symbiosis_pattern"
+
+[dependencies]
+syntex_syntax = "0.29"
+
+[dependencies.aster]
+version = "0.13"
+features = ["with-syntex"]
+
+[dependencies.symbiosis_core]
+path = "../core"

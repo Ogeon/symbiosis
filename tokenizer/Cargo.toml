@@ -1,0 +1,28 @@
+[package]
+name = "symbiosis_tokenizer"
+version = "0.0.1"
+authors = ["Erik Hedvall <hello@erikhedvall.nu>"]
+
+build = "build.rs"
+
+[lib]
+name = "symbiosis_tokenizer"
+
+[dependencies]
+html5ever = "0.5"
+string_cache = "0.2"
+lalrpop-util = "0.10"
+
+[dependencies.symbiosis_core]
+path = "../core"
+
+[build-dependencies]
+syntex_syntax = "0.29"
+lalrpop = "0.10"
+
+[build-dependencies.symbiosis_pattern]
+path = "../pattern"
+
+[build-dependencies.aster]
+version = "0.13"
+features = ["with-syntex"]

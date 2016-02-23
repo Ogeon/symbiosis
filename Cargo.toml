@@ -7,7 +7,6 @@ authors = ["Erik Hedvall <hello@erikhedvall.nu>"]
 [dependencies]
 html5ever = "0.5"
 string_cache = "0.2"
-tendril = "0.2"
 
-[dependencies.symbiosis_core]
-path = "core"
+[dependencies.symbiosis_tokenizer]
+path = "tokenizer"

@@ -1,8 +1,7 @@
 extern crate html5ever;
 #[macro_use]
 extern crate string_cache;
-extern crate tendril;
-extern crate symbiosis_core;
+extern crate symbiosis_tokenizer;
 
 use std::path;
 use std::fs::{File, read_dir};
@@ -12,11 +11,9 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::mem::swap;
 
-use tendril::StrTendril;
-
-pub use symbiosis_core::{fragment, Error};
-use symbiosis_core::{Tokenizer, TokenSink};
-use symbiosis_core::parser::{self, ExtensibleMap};
+pub use symbiosis_tokenizer::{fragment, Error, StrTendril};
+use symbiosis_tokenizer::{Tokenizer, TokenSink};
+use symbiosis_tokenizer::parser::{self, ExtensibleMap};
 
 use codegen::{Token, Content, Codegen, ContentType, Scope, Path, Params};
 use fragment::Fragment;
@@ -42,9 +39,9 @@ impl TemplateGroup {
     }
 
     ///Add a template from a string.
-    pub fn parse_string(&mut self, name: String, source: String) -> Result<(), Error> {
+    pub fn parse_string<S: Into<StrTendril>>(&mut self, name: String, source: S) -> Result<(), Error> {
         let mut template = Template::extending(&self.fragments);
-        try!(template.parse_string(source));
+        try!(template.parse_string(source.into()));
         self.templates.push(ParsedTemplate {
             name: name,
             parameters: template.parameters,
@@ -141,10 +138,10 @@ impl<'a> Template<'a> {
     }
 
     ///Add content from a string to the template.
-    pub fn parse_string(&mut self, source: String) -> Result<(), Error> {
+    pub fn parse_string<S: Into<StrTendril>>(&mut self, source: S) -> Result<(), Error> {
         {
             let mut tokenizer = Tokenizer::new(&mut *self);
-            try!(tokenizer.parse_string(source));
+            try!(tokenizer.parse_string(source.into()));
         }
 
         if self.errors.len() > 0 {

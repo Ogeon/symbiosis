@@ -5,7 +5,7 @@ use std::borrow::ToOwned;
 use std::fmt;
 use std::fmt::Write as FmtWrite;
 
-use tendril::StrTendril;
+use StrTendril;
 
 use codegen::{Codegen, Writer, Line, Logic, Token, Scope, ContentType, Content, Path, Params};
 

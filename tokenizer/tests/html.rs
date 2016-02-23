@@ -3,14 +3,14 @@
 //closely as possible.
 
 extern crate tendril;
-extern crate symbiosis_core;
+extern crate symbiosis_tokenizer;
 
 use tendril::{StrTendril, SliceExt};
 
-use symbiosis_core::{Tokenizer, TokenSink};
-use symbiosis_core::codegen::{Token, Content};
-use symbiosis_core::parser::ExtensibleMap;
-use symbiosis_core::fragment::Fragment;
+use symbiosis_tokenizer::{Tokenizer, TokenSink};
+use symbiosis_tokenizer::codegen::{Token, Content};
+use symbiosis_tokenizer::parser::ExtensibleMap;
+use symbiosis_tokenizer::fragment::Fragment;
 
 struct Sink {
     buffer: String,

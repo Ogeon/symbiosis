@@ -3,7 +3,7 @@ use std::fmt::Write as FmtWrite;
 use std::default::Default;
 use std::fmt;
 
-use tendril::StrTendril;
+use StrTendril;
 
 use codegen::{Codegen, Writer, Line, Logic, Token, Scope, ContentType, Content, Path, Params};
 

@@ -1,12 +1,15 @@
 use std::borrow::Cow;
 use std::fmt;
 
-use tendril::StrTendril;
+use StrTendril;
 
 use codegen::{Scope, Logic, ContentType, Path, Name};
 
-#[macro_use]
+pub use self::pattern::InputType;
+
+mod generated;
 pub mod pattern;
+
 
 macro_rules! impl_fragment {
     ($(#[$attr:meta])* frag $str_name:expr => $name:ident: |$args:ident| $process:block) => {
@@ -22,7 +25,16 @@ macro_rules! impl_fragment {
             }
 
             fn pattern(&self) -> $crate::fragment::pattern::Pattern {
-                build_pattern!([input](",", $at_least))
+                use $crate::fragment::pattern::{Pattern, Component};
+                let mut inner = Pattern::new();
+                inner.push(Component::Input);
+                let mut pattern = Pattern::new();
+                pattern.push(Component::Repeat {
+                    pattern: inner,
+                    at_least: $at_least,
+                    delimiter: ",".into(),
+                });
+                pattern
             }
 
             fn process(&self, args: Vec<$crate::fragment::pattern::Argument>)
@@ -45,7 +57,7 @@ macro_rules! impl_fragment {
             }
         }
     };
-    ($(#[$attr:meta])* pattern ($arg_t: ident { $($pattern: tt)* }) frag $str_name:expr => $name:ident: |$args:ident| $process:block) => {
+    ($(#[$attr:meta])* pattern $module:ident frag $str_name:expr => $name:ident: |$args:ident| $process:block) => {
         $(#[$attr])*
         pub struct $name;
 
@@ -55,35 +67,16 @@ macro_rules! impl_fragment {
             }
 
             fn pattern(&self) -> $crate::fragment::pattern::Pattern {
-                build_annotated_pattern!($arg_t { $($pattern)* })
+                $crate::fragment::generated::$module::pattern()
             }
 
             fn process(&self, args: Vec<$crate::fragment::pattern::Argument>)
-            -> Result<$crate::fragment::ReturnType, $crate::fragment::Error>{
-                pattern_decoder!($arg_t { $($pattern)* });
-                let $args = try!($arg_t::decode(args));
+            -> Result<$crate::fragment::ReturnType, $crate::fragment::Error> {
+                let $args = try!($crate::fragment::generated::$module::decode(args));
                 $process
             }
         }
     };
-    ($(#[$attr:meta])* pattern ($($pattern: tt)*) frag $str_name:expr => $name:ident: |$args:ident| $process:block) => {
-        $(#[$attr])*
-        pub struct $name;
-
-        impl $crate::fragment::Fragment for $name {
-            fn identifier(&self) -> &'static str {
-                $str_name
-            }
-
-            fn pattern(&self) -> $crate::fragment::pattern::Pattern {
-                build_pattern!($($pattern)*)
-            }
-
-            fn process(&self, $args: Vec<$crate::fragment::pattern::Argument>)
-            -> Result<$crate::fragment::ReturnType, $crate::fragment::Error>
-            $process
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -118,6 +111,13 @@ impl Error {
         Error {
             callstack: vec![],
             kind: ErrorKind::UnexpectedArgument(ArgumentKind::Repeated, but_found)
+        }
+    }
+    
+    pub fn expected_token(but_found: Option<pattern::Argument>) -> Error {
+        Error {
+            callstack: vec![],
+            kind: ErrorKind::UnexpectedArgument(ArgumentKind::Token, but_found)
         }
     }
 
@@ -169,6 +169,7 @@ enum ArgumentKind {
     Optional,
     Repeated,
     String,
+    Token,
 }
 
 impl fmt::Display for ArgumentKind {
@@ -178,6 +179,7 @@ impl fmt::Display for ArgumentKind {
             ArgumentKind::Optional => f.write_str("an optional pattern"),
             ArgumentKind::Repeated => f.write_str("a repeated pattern"),
             ArgumentKind::String => f.write_str("a string literal"),
+            ArgumentKind::Token => f.write_str("a token"),
         }
     }
 }
@@ -212,7 +214,15 @@ impl<F: Fn(Vec<pattern::Argument>) -> Result<ReturnType, Error>> Fragment for (&
     }
 
     fn pattern(&self) -> pattern::Pattern {
-        build_pattern!([input](","))
+        let mut inner = pattern::Pattern::new();
+        inner.push(pattern::Component::Input);
+        let mut pattern = pattern::Pattern::new();
+        pattern.push(pattern::Component::Repeat {
+            pattern: inner,
+            at_least: 0,
+            delimiter: ",".into(),
+        });
+        pattern
     }
 
     fn process(&self, args: Vec<pattern::Argument>) -> Result<ReturnType, Error> {
@@ -255,7 +265,7 @@ pub enum ReturnType {
     },
 }
 
-///Things that can be sent into fragments.
+/*///Things that can be sent into fragments.
 pub enum InputType {
     ///A placeholder parameter and its preferred content type.
     Placeholder(Path, ContentType),
@@ -270,7 +280,7 @@ impl fmt::Debug for InputType {
             InputType::Logic(_) => f.write_str("a logic expression")
         }
     }
-}
+}*/
 
 impl_fragment!{
     #[doc = "Start of an `if` scope."]
@@ -352,7 +362,7 @@ impl_fragment!{
     #[doc = "`not` logic fragment."]
     #[doc = ""]
     #[doc = "`not(a)` will be true if condition `a` is false."]
-    pattern (NotArgs { cond: input })
+    pattern not
     frag "not" => Not: |args| {
         let cond = match args.cond {
             InputType::Placeholder(name, _) => Logic::Value(name),
@@ -368,13 +378,10 @@ impl_fragment!{
     #[doc = ""]
     #[doc = "`foreach(element in collection)` or `foreach(key => element in collection)` will repeat"]
     #[doc = "everything within the scope for each `element` (and `key`) in `collection`."]
-    pattern (ForEachArgs {
-        key: (Key { k: input {"=>"} })?
-        element: input
-        {"in"}
-        collection: input
-    })
+    pattern foreach
     frag "foreach" => ForEach: |args| {
+        use self::generated::foreach::Key;
+
         match (args.key, args.element, args.collection) {
             (None, element, collection) => {
                 let element = match element {

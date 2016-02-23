@@ -1,0 +1,50 @@
+use tendril::StrTendril;
+use pattern::{AnnotatedPattern, AnnotatedComponent, ComponentKind};
+
+grammar;
+
+pub Pattern: AnnotatedPattern = {
+    <ty: Type> "{" <components: (<Component>)*> "}" => AnnotatedPattern {
+        name: Some(ty),
+        components: components,
+    },
+     <components: (<Component>)*> => AnnotatedPattern {
+        name: None,
+        components: components,
+    },
+};
+
+Component: AnnotatedComponent = {
+    <name: (<Ident> ":")?> "input" => AnnotatedComponent {
+        name: name,
+        kind: ComponentKind::Input,
+    },
+    <name: (<Ident> ":")?> "string" => AnnotatedComponent {
+        name: name,
+        kind: ComponentKind::String,
+    },
+    <name: (<Ident> ":")?> "(" <pattern: Pattern> ")" "?" => AnnotatedComponent {
+        name: name,
+        kind: ComponentKind::Optional(pattern),
+    },
+    <name: (<Ident> ":")?> "[" <pattern: Pattern> "]" <delimiter: Str> "*" <at_least: (<Num>)?> => AnnotatedComponent {
+        name: name,
+        kind: ComponentKind::Repeat {
+            pattern: pattern,
+            delimiter: delimiter,
+            at_least: at_least.unwrap_or(0),
+        },
+    },
+    "{" <token: Str> "}" => AnnotatedComponent {
+        name: None,
+        kind: ComponentKind::Token(token),
+    }
+};
+
+Num: usize = <r"[0-9]+"> => <>.parse().unwrap();
+
+Str: String = <s:r#""[^"]*""#> => s[1..s.len()-1].into();
+
+Ident: String = <r"[a-z][a-z0-9_]*"> => <>.into();
+
+Type: String = <r"[A-Z][a-zA-Z0-9]*"> => <>.into();

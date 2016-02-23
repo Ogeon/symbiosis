@@ -1,7 +1,7 @@
 use std::io::{self, Write};
 use std::fmt;
 
-pub use symbiosis_core::codegen::*;
+pub use symbiosis_tokenizer::codegen::*;
 
 ///Shortcut for the commonly used `try!(write!(...))`.
 #[macro_export]
