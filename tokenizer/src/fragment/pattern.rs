@@ -26,6 +26,35 @@ impl Pattern {
         self.0.push(component);
     }
 
+    pub fn input(mut self) -> Pattern {
+        self.push(Component::Input);
+        self
+    }
+
+    pub fn string(mut self) -> Pattern {
+        self.push(Component::String);
+        self
+    }
+
+    pub fn token<T: Into<Cow<'static, str>>>(mut self, token: T) -> Pattern {
+        self.push(Component::Token(token.into()));
+        self
+    }
+
+    pub fn optional(mut self, pattern: Pattern) -> Pattern {
+        self.push(Component::Optional(pattern));
+        self
+    }
+
+    pub fn repeat<T: Into<Cow<'static, str>>>(mut self, at_least: usize, delimiter: T, pattern: Pattern) -> Pattern {
+        self.push(Component::Repeat {
+            at_least: at_least,
+            delimiter: delimiter.into(),
+            pattern: pattern,
+        });
+        self
+    }
+
     #[doc(hidden)]
     pub fn parse<F, E>(&self, src: &[Input], mut get_input: F) -> Result<Vec<Argument>, E> where
         F: FnMut(&FragmentKind) -> Result<InputType, E>,

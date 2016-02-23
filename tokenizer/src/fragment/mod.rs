@@ -27,16 +27,8 @@ macro_rules! impl_fragment {
             }
 
             fn pattern(&self) -> $crate::fragment::pattern::Pattern {
-                use $crate::fragment::pattern::{Pattern, Component};
-                let mut inner = Pattern::new();
-                inner.push(Component::Input);
-                let mut pattern = Pattern::new();
-                pattern.push(Component::Repeat {
-                    pattern: inner,
-                    at_least: $at_least,
-                    delimiter: ",".into(),
-                });
-                pattern
+                use $crate::fragment::pattern::Pattern;
+                Pattern::new().repeat($at_least, ",", Pattern::new().input())
             }
 
             fn process(&self, args: Vec<$crate::fragment::pattern::Argument>)
@@ -216,15 +208,7 @@ impl<F: Fn(Vec<pattern::Argument>) -> Result<ReturnType, Error>> Fragment for (&
     }
 
     fn pattern(&self) -> pattern::Pattern {
-        let mut inner = pattern::Pattern::new();
-        inner.push(pattern::Component::Input);
-        let mut pattern = pattern::Pattern::new();
-        pattern.push(pattern::Component::Repeat {
-            pattern: inner,
-            at_least: 0,
-            delimiter: ",".into(),
-        });
-        pattern
+        pattern::Pattern::new().repeat(0, ",", pattern::Pattern::new().input())
     }
 
     fn process(&self, args: Vec<pattern::Argument>) -> Result<ReturnType, Error> {
