@@ -10,8 +10,8 @@ rand = "*"
 rustc-serialize = "*"
 rustful = "0.6"
 
-[dependencies.symbiosis-rust]
-path = "../rust"
+[dependencies.symbiosis_static]
+path = "../static"
 
 [build-dependencies.symbiosis]
 path = ".."

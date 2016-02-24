@@ -10,6 +10,6 @@ files and statically typed languages can still benefit from its type checking.
 
 [Online documentation for `symbiosis`](http://ogeon.github.io/docs/symbiosis/master/symbiosis)
 
-[Online documentation for `symbiosis_rust`](http://ogeon.github.io/docs/symbiosis/master/symbiosis_rust)
+[Online documentation for `symbiosis_static`](http://ogeon.github.io/docs/symbiosis/master/symbiosis_static)
 
-See `example` directory for simple example of how it can be used.
+See `example` directory for a simple example of how it can be used.

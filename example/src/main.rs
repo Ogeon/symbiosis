@@ -1,4 +1,4 @@
-extern crate symbiosis_rust;
+extern crate symbiosis_static;
 #[macro_use] extern crate rustful;
 extern crate rand;
 extern crate rustc_serialize;
@@ -11,7 +11,7 @@ use std::sync::{Arc, RwLock};
 use std::cmp::max;
 use std::error::Error;
 
-use symbiosis_rust::Generator;
+use symbiosis_static::Generator;
 
 use rustful::{Server, TreeRouter, Context, Response, Handler};
 use rustful::StatusCode;

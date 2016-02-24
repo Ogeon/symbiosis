@@ -87,10 +87,10 @@ fn write_ty<W: Write>(w: &mut Line<W>, ty: &ContentType) -> Result<(), Error> {
     }
 
     match ty {
-        &ContentType::String(_) => try_w!(w, "::symbiosis_rust::Content<'a>"),
+        &ContentType::String(_) => try_w!(w, "::symbiosis_static::Content<'a>"),
         &ContentType::Bool => try_w!(w, "bool"),
         &ContentType::Collection(Some(ref inner), _) => {
-            try_w!(w, "::symbiosis_rust::Collection<'a, ");
+            try_w!(w, "::symbiosis_static::Collection<'a, ");
             try!(write_ty(w, inner));
             try_w!(w, ">");
         },

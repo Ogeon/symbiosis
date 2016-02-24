@@ -17,9 +17,9 @@ script:
   - cd ../dynamic
   - cargo test
   - cargo doc
-  - mkdir ../rust/target
-  - mv target/doc/ ../rust/target/doc
-  - cd ../rust
+  - mkdir ../static/target
+  - mv target/doc/ ../static/target/doc
+  - cd ../static
   - cargo test
   - cargo doc
   - mv target/doc/ ../target/doc
