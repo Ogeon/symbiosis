@@ -27,4 +27,5 @@ script:
   - cargo build
   - cd ..
   - cargo doc
-after_success: curl https://raw.githubusercontent.com/ogeon/travis-doc-upload/master/travis-doc-upload.sh | sh
+after_success:
+  - sh scripts/upload_doc.sh
