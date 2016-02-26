@@ -10,7 +10,7 @@ name = "symbiosis_core"
 
 [dependencies]
 tendril = "0.2"
-lalrpop-util = "0.10"
+lalrpop-util = "0.11"
 
 [build-dependencies.lalrpop]
-varsion = "0.10"
+varsion = "0.11"
