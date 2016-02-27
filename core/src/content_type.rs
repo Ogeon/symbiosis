@@ -82,7 +82,11 @@ impl ContentType {
                     (&mut Some(_), None) |(&mut None, None)  => {}
                 };
             },
-            (&mut ContentType::Struct(_, ref mut a, ref mut a_o), ContentType::Struct(_, ref mut b, ref mut b_o)) => {
+            (&mut ContentType::Struct(ref mut a_n, ref mut a, ref mut a_o), ContentType::Struct(ref mut b_n, ref mut b, ref mut b_o)) => {
+                if a_n.is_none() {
+                    *a_n = b_n.take();
+                }
+                
                 *a_o = *a_o | *b_o;
 
                 for (name, ty) in b.drain() {

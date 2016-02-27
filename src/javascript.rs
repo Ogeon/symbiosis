@@ -218,7 +218,8 @@ impl<'a> Codegen for JavaScript<'a> {
                             parent.tokens.push(JsToken::Statement((t, false)));
                         }
                     }
-                }
+                },
+                &Token::TypeHint(_, _) => { }
             }
         }
 
@@ -390,7 +391,8 @@ impl<'a> Codegen for JavaScript<'a> {
                             func.unindent();
                             try_w!(func, "}}");
                         }
-                    }
+                    },
+                    &Token::TypeHint(_, _) => {}
                 }
 
                 Ok(())

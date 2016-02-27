@@ -5,7 +5,7 @@ use std::fmt;
 
 use StrTendril;
 
-use codegen::{Scope, Logic, ContentType, Path, Name};
+use codegen::{Scope, Logic, ContentType, Path, Name, Params};
 
 pub use self::pattern::InputType;
 
@@ -249,6 +249,8 @@ pub enum ReturnType {
         arguments: Vec<(Name, Vec<ReturnType>)>,
         content: Option<Vec<ReturnType>>,
     },
+    ///Give a placeholder a preferred content type, but don't use it.
+    TypeHint(Path, ContentType),
 }
 
 pub trait FragmentStore {
@@ -394,5 +396,21 @@ impl_fragment!{
                 Ok(ReturnType::Scope(Scope::ForEach(collection, element, Some(key))))
             }
         }
+    }
+}
+
+impl_fragment!{
+    ///Name a data structure.
+    ///
+    ///`struct_name(some_struct is "StructName")` will tell the code generator
+    ///that the value `some_struct` should be of the type `StructName`.
+    pattern struct_name
+    frag "struct_name" => StructName: |args| {
+        let path = match args.path {
+            InputType::Placeholder(path, _) => path,
+            e => return Err(Error::unexpected_input_type(InputType::Placeholder(vec!["path".into()].into(), ContentType::Struct(None, Params::new(), false)), e)),
+        };
+
+        Ok(ReturnType::TypeHint(path, ContentType::Struct(Some(args.name.into()), Params::new(), false)))
     }
 }

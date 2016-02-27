@@ -149,6 +149,7 @@ pub enum Token {
     Text(Content),
     Scope(Scope),
     End,
+    TypeHint(Path, ContentType),
 }
 
 ///Types of text content.

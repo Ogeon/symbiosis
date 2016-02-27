@@ -64,12 +64,13 @@ where that's the convention. The existence of a value is considered `true` and
 its absence is considered `false`. Empty collections and strings are also
 `true`.
 
-The only really tricky part with this is the data structures. Fragments may
-name them, but there may still be unnamed ones. The solution for this problem
-is to generate a name from the access path to where it's used, so the
-structure where `{{ meta.date }}` can be found, in the template `Entry`, could
-get the name `EntryMeta`. Some languages, like JavaScript, doesn't really care
-about named structures, so that problem doesn't exist there.
+The only really tricky part with this is the data structures. Fragments (like
+the `struct_name` fragment) may name them, but there may still be unnamed
+ones. The solution for this problem is to generate a name from the access path
+to where it's used, so the type of `meta` in `{{ meta.date }}`, in the
+template `Entry`, could get the name `EntryMeta`. Some languages, like
+JavaScript, doesn't really care about named structures, so that problem
+doesn't exist there.
 
 ## The Crates
 

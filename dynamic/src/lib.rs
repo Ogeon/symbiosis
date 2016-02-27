@@ -273,6 +273,7 @@ impl<'a, 'b> TokenSink for &'b mut TokenBuilder<'a> {
                 });
             },
             CoreToken::End => self.close_scope(),
+            CoreToken::TypeHint(_, _) => {},
         }
     }
 

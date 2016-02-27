@@ -299,7 +299,8 @@ impl<'a> Codegen for Rust<'a> {
 
                         func.unindent();
                         try_w!(func, "}}");
-                    }
+                    },
+                    &Token::TypeHint(_, _) => {},
                 }
             }
 

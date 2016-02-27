@@ -110,6 +110,7 @@ impl<T: TokenSink> Tokenizer<T> {
                 ReturnType::Scope(scope) => self.sink.process_token(Token::Scope(scope)),
                 ReturnType::End => self.sink.process_token(Token::End),
                 ReturnType::Tag { name, arguments, content } => try!(self.add_tag_tree(name, arguments, content)),
+                ReturnType::TypeHint(path, ty) => self.sink.process_token(Token::TypeHint(path, ty)),
             };
         }
 
@@ -136,6 +137,7 @@ impl<T: TokenSink> Tokenizer<T> {
                     self.sink.process_token(Token::BeginAttribute(attribute.name.local.into(), Content::String(Text::empty())));
                 },
                 Some(ReturnType::Tag { .. }) => return Err("HTML tags can not be used as pure text".into()),
+                Some(ReturnType::TypeHint(path, ty)) => self.sink.process_token(Token::TypeHint(path, ty)),
                 None => self.sink.process_token(Token::BeginAttribute(attribute.name.local.into(), Content::String(Text::empty())))
             }
 
@@ -147,6 +149,7 @@ impl<T: TokenSink> Tokenizer<T> {
                     ReturnType::Scope(scope) => self.sink.process_token(Token::Scope(scope)),
                     ReturnType::End => self.sink.process_token(Token::End),
                     ReturnType::Tag { .. } => return Err("HTML tags can not be used as pure text".into()),
+                    ReturnType::TypeHint(path, ty) => self.sink.process_token(Token::TypeHint(path, ty)),
                 }
             }
 
@@ -197,6 +200,7 @@ impl<T: TokenSink> Tokenizer<T> {
                     self.sink.process_token(Token::BeginAttribute(attr, Content::String(Text::empty())));
                 },
                 Some(ReturnType::Tag { .. }) => return Err("HTML tags can not be used as pure text".into()),
+                Some(ReturnType::TypeHint(path, ty)) => self.sink.process_token(Token::TypeHint(path, ty)),
                 None => self.sink.process_token(Token::BeginAttribute(attr, Content::String(Text::empty())))
             }
 
@@ -208,6 +212,7 @@ impl<T: TokenSink> Tokenizer<T> {
                     ReturnType::Scope(scope) => self.sink.process_token(Token::Scope(scope)),
                     ReturnType::End => self.sink.process_token(Token::End),
                     ReturnType::Tag { .. } => return Err("HTML tags can not be used as pure text".into()),
+                    ReturnType::TypeHint(path, ty) => self.sink.process_token(Token::TypeHint(path, ty)),
                 }
             }
             self.sink.process_token(Token::EndAttribute);
@@ -237,6 +242,7 @@ impl<T: TokenSink> Tokenizer<T> {
                     ReturnType::Scope(scope) => self.sink.process_token(Token::Scope(scope)),
                     ReturnType::End => self.sink.process_token(Token::End),
                     ReturnType::Tag { name, arguments, content } => try!(self.add_tag_tree(name, arguments, content)),
+                    ReturnType::TypeHint(path, ty) => self.sink.process_token(Token::TypeHint(path, ty)),
                 }
             }
 

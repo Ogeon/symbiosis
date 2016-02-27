@@ -58,7 +58,7 @@ impl<'a> TokenSink for &'a mut Sink {
                 self.buffer.push_str(">");
             },
             Token::CloseTag(name) => self.buffer.push_str(&format!("</{}>", name)),
-            Token::Scope(_) | Token::End => {}
+            Token::Scope(_) | Token::End | Token::TypeHint(_, _) => {}
         }
     }
 

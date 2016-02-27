@@ -29,6 +29,13 @@ fn main() {
             collection: input
         }
     "#);
+    build_pattern(&mut file, "struct_name", r#"
+        StructNameArgs {
+            path: input
+            {"is"}
+            name: string
+        }
+    "#);
 }
 
 fn build_module(name: &str, items: Vec<P<Item>>) -> P<Item> {

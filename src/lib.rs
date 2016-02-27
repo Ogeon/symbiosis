@@ -288,6 +288,9 @@ impl<'a, 'b: 'a> TokenSink for &'a mut Template<'b> {
                 }
                 self.tokens.push(Token::End);
             },
+            Token::TypeHint(path, ty) => if let Err(e) = self.reg_placeholder(path, ty) {
+                self.errors.push(e.into());
+            },
         }
     }
 
@@ -312,6 +315,9 @@ fn init_fragments<'a>() -> HashMap<&'static str, Box<Fragment + 'a>> {
     map.insert(f.identifier(), Box::new(f));
 
     let f = fragment::ForEach;
+    map.insert(f.identifier(), Box::new(f));
+
+    let f = fragment::StructName;
     map.insert(f.identifier(), Box::new(f));
 
     map
