@@ -30,9 +30,12 @@ pub struct TemplateGroup {
 
 impl TemplateGroup {
     pub fn new() -> TemplateGroup {
+        let mut fragments = HashMap::new();
+        fragment::init_prelude(&mut fragments);
+
         TemplateGroup {
             templates: vec![],
-            fragments: init_fragments()
+            fragments: fragments,
         }
     }
 
@@ -116,8 +119,10 @@ pub struct Template<'a> {
 impl<'a> Template<'a> {
     ///Create an empty template.
     pub fn new() -> Template<'a> {
+        let mut fragments = HashMap::new();
+        fragment::init_prelude(&mut fragments);
         Template {
-            fragments: ExtensibleMap::Owned(init_fragments()),
+            fragments: ExtensibleMap::Owned(fragments),
             parameters: Params::new(),
             tokens: vec![],
             scopes: vec![],
@@ -299,30 +304,6 @@ impl<'a, 'b: 'a> TokenSink for &'a mut Template<'b> {
     }
 }
 
-fn init_fragments<'a>() -> HashMap<&'static str, Box<Fragment + 'a>> {
-    let mut map = HashMap::new();
-
-    let f: Box<Fragment + 'a> = Box::new(fragment::If);
-    map.insert(f.identifier(), f);
-
-    let f = fragment::And;
-    map.insert(f.identifier(), Box::new(f));
-
-    let f = fragment::Or;
-    map.insert(f.identifier(), Box::new(f));
-
-    let f = fragment::Not;
-    map.insert(f.identifier(), Box::new(f));
-
-    let f = fragment::ForEach;
-    map.insert(f.identifier(), Box::new(f));
-
-    let f = fragment::StructName;
-    map.insert(f.identifier(), Box::new(f));
-
-    map
-}
-
 enum ExtensibleMap<'a, K: 'a, V: 'a> {
     Owned(HashMap<K, V>),
     Extended(&'a HashMap<K, V>, HashMap<K, V>)
@@ -355,8 +336,12 @@ impl<'a, K: Hash + Eq, V> ExtensibleMap<'a, K, V> {
     }
 }
 
-impl<'a, K: Hash + Eq + Borrow<str>> FragmentStore for ExtensibleMap<'a, K, Box<Fragment>> {
+impl<'a, K: Hash + Eq + Borrow<str> + From<&'static str>> FragmentStore for ExtensibleMap<'a, K, Box<Fragment>> {
     fn get(&self, ident: &str) -> Option<&Fragment> {
         self.get(ident).map(AsRef::as_ref)
+    }
+
+    fn insert(&mut self, fragment: Box<Fragment>) {
+        self.insert(fragment.identifier().into(), fragment);
     }
 }

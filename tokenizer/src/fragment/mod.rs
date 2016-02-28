@@ -255,12 +255,27 @@ pub enum ReturnType {
 
 pub trait FragmentStore {
     fn get(&self, ident: &str) -> Option<&Fragment>;
+    fn insert(&mut self, fragment: Box<Fragment>);
 }
 
-impl<S: Hash + Eq + Borrow<str>> FragmentStore for HashMap<S, Box<Fragment>> {
+impl<S: Hash + Eq + Borrow<str> + From<&'static str>> FragmentStore for HashMap<S, Box<Fragment>> {
     fn get(&self, ident: &str) -> Option<&Fragment> {
         self.get(ident).map(AsRef::as_ref)
     }
+
+    fn insert(&mut self, fragment: Box<Fragment>) {
+        self.insert(fragment.identifier().into(), fragment);
+    }
+}
+
+///Initiate the default fragments.
+pub fn init_prelude<S: FragmentStore>(store: &mut S) {
+    store.insert(Box::new(If));
+    store.insert(Box::new(And));
+    store.insert(Box::new(Or));
+    store.insert(Box::new(Not));
+    store.insert(Box::new(ForEach));
+    store.insert(Box::new(StructName));
 }
 
 impl_fragment!{

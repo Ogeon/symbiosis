@@ -13,7 +13,7 @@ use symbiosis_tokenizer::codegen::Token as CoreToken;
 use symbiosis_tokenizer::codegen::Scope as CoreScope;
 use symbiosis_tokenizer::codegen::Logic as CoreLogic;
 use symbiosis_tokenizer::codegen::{Path, Content};
-use symbiosis_tokenizer::fragment::{Fragment, FragmentStore};
+use symbiosis_tokenizer::fragment::{Fragment, FragmentStore, init_prelude};
 use symbiosis_tokenizer::fragment::pattern::Argument;
 
 pub use symbiosis_tokenizer::fragment;
@@ -113,8 +113,11 @@ pub struct Parser {
 
 impl Parser {
     pub fn new() -> Parser {
+        let mut fragments = HashMap::new();
+        init_prelude(&mut fragments);
+        
         Parser {
-            fragments: HashMap::new(),
+            fragments: fragments,
         }
     }
 
