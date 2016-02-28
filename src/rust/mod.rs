@@ -189,7 +189,7 @@ impl<'a> Codegen for Rust<'a> {
                     &Token::CloseTag(ref name) => try_w_s!(string_buf, "</{}>", name),
                     &Token::BeginAttribute(ref name, ref content) => match content {
                         &Content::String(ref content) => try_w_s!(string_buf, " {}=\\\"{}", name, content.to_string()),
-                        &Content::Placeholder(ref placeholder, _) => {
+                        &Content::Placeholder(ref placeholder) => {
                             match find_param(placeholder, params, structs, &scopes) {
                                 Some((access_path, Some((&Type::Content(_), false)))) | Some((access_path, None)) => {
                                     try_w_s!(string_buf, " {}=\\\"{{}}", name);
@@ -214,7 +214,7 @@ impl<'a> Codegen for Rust<'a> {
                     },
                     &Token::AppendToAttribute(ref text) | &Token::Text(ref text) => match text {
                         &Content::String(ref content) => try_w_s!(string_buf, "{}", content.to_string()),
-                        &Content::Placeholder(ref placeholder, _) => {
+                        &Content::Placeholder(ref placeholder) => {
                             match find_param(placeholder, params, structs, &scopes) {
                                 Some((access_path, Some((&Type::Content(_), false)))) | Some((access_path, None)) => {
                                     string_buf.push_str("{}");
@@ -306,7 +306,6 @@ impl<'a> Codegen for Rust<'a> {
                         func.unindent();
                         try_w!(func, "}}");
                     },
-                    &Token::TypeHint(_, _) => {},
                 }
             }
 

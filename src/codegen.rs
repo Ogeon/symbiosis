@@ -5,11 +5,33 @@ use std::collections::hash_map::{HashMap, Values};
 use std::hash::Hash;
 use std::borrow::Borrow;
 
-pub use symbiosis_tokenizer::codegen as core;
-
-pub use self::core::{Name, Text, Path, Logic, Token, Scope, Content};
+pub use symbiosis_tokenizer::codegen::{Name, Text, Path, Logic, Scope, Doctype};
 
 use symbiosis_tokenizer::parser::Error;
+use StrTendril;
+
+pub enum Token {
+    SetDoctype(Doctype),
+    Comment(StrTendril),
+    BeginTag(Name),
+    EndTag(bool),
+    CloseTag(Name),
+    BeginAttribute(Name, Content),
+    AppendToAttribute(Content),
+    EndAttribute,
+    Text(Content),
+    Scope(Scope),
+    End,
+}
+
+///Types of text content.
+pub enum Content {
+    ///A plain string.
+    String(Text),
+
+    ///Use content from a parameter in a placeholder.
+    Placeholder(Path)
+}
 
 ///Shortcut for the commonly used `try!(write!(...))`.
 #[macro_export]

@@ -12,9 +12,11 @@ use std::mem::swap;
 pub use symbiosis_tokenizer::{fragment, Error, StrTendril};
 use symbiosis_tokenizer::{Tokenizer, TokenSink};
 use symbiosis_tokenizer::parser;
+use symbiosis_tokenizer::codegen::{ContentType, Params};
+use symbiosis_tokenizer::codegen::Token as CoreToken;
+use symbiosis_tokenizer::codegen::Content as CoreContent;
 
 use codegen::{Token, Content, Codegen, Scope, Path, Type, Struct, StructName, Name};
-use codegen::core::{ContentType, Params};
 use fragment::{Fragment, FragmentStore};
 
 
@@ -369,55 +371,55 @@ impl<'a> Template<'a> {
 }
 
 impl<'a, 'b: 'a> TokenSink for &'a mut Template<'b> {
-    fn process_token(&mut self, token: Token) {
+    fn process_token(&mut self, token: CoreToken) {
         match token {
-            Token::SetDoctype(doctype) => self.tokens.push(Token::SetDoctype(doctype)),
-            Token::Comment(comment) => self.tokens.push(Token::Comment(comment)),
-            Token::BeginTag(name) => self.tokens.push(Token::BeginTag(name)),
-            Token::EndTag(self_close) => self.tokens.push(Token::EndTag(self_close)),
-            Token::CloseTag(name) => self.tokens.push(Token::CloseTag(name)),
+            CoreToken::SetDoctype(doctype) => self.tokens.push(Token::SetDoctype(doctype)),
+            CoreToken::Comment(comment) => self.tokens.push(Token::Comment(comment)),
+            CoreToken::BeginTag(name) => self.tokens.push(Token::BeginTag(name)),
+            CoreToken::EndTag(self_close) => self.tokens.push(Token::EndTag(self_close)),
+            CoreToken::CloseTag(name) => self.tokens.push(Token::CloseTag(name)),
 
-            Token::BeginAttribute(attr, content) => match content {
-                Content::String(content) => self.tokens.push(Token::BeginAttribute(attr, Content::String(content))),
-                Content::Placeholder(name, ty) => {
-                    if let Err(e) = self.reg_placeholder(name.clone(), ty.clone()) {
+            CoreToken::BeginAttribute(attr, content) => match content {
+                CoreContent::String(content) => self.tokens.push(Token::BeginAttribute(attr, Content::String(content))),
+                CoreContent::Placeholder(name, ty) => {
+                    if let Err(e) = self.reg_placeholder(name.clone(), ty) {
                         self.errors.push(e.into());
                     }
-                    self.tokens.push(Token::BeginAttribute(attr, Content::Placeholder(name, ty)));
+                    self.tokens.push(Token::BeginAttribute(attr, Content::Placeholder(name)));
                 }
             },
-            Token::AppendToAttribute(content) => match content {
-                Content::String(content) => self.tokens.push(Token::AppendToAttribute(Content::String(content))),
-                Content::Placeholder(name, ty) => {
-                    if let Err(e) = self.reg_placeholder(name.clone(), ty.clone()) {
+            CoreToken::AppendToAttribute(content) => match content {
+                CoreContent::String(content) => self.tokens.push(Token::AppendToAttribute(Content::String(content))),
+                CoreContent::Placeholder(name, ty) => {
+                    if let Err(e) = self.reg_placeholder(name.clone(), ty) {
                         self.errors.push(e.into());
                     }
-                    self.tokens.push(Token::AppendToAttribute(Content::Placeholder(name, ty)));
+                    self.tokens.push(Token::AppendToAttribute(Content::Placeholder(name)));
                 }
             },
-            Token::Text(content) => match content {
-                Content::String(content) => self.tokens.push(Token::Text(Content::String(content))),
-                Content::Placeholder(name, ty) => {
-                    if let Err(e) = self.reg_placeholder(name.clone(), ty.clone()) {
+            CoreToken::Text(content) => match content {
+                CoreContent::String(content) => self.tokens.push(Token::Text(Content::String(content))),
+                CoreContent::Placeholder(name, ty) => {
+                    if let Err(e) = self.reg_placeholder(name.clone(), ty) {
                         self.errors.push(e.into());
                     }
-                    self.tokens.push(Token::Text(Content::Placeholder(name, ty)));
+                    self.tokens.push(Token::Text(Content::Placeholder(name)));
                 }
             },
-            Token::EndAttribute => self.tokens.push(Token::EndAttribute),
-            Token::Scope(scope) => {
+            CoreToken::EndAttribute => self.tokens.push(Token::EndAttribute),
+            CoreToken::Scope(scope) => {
                 if let Err(e) = self.reg_scope_vars(&scope) {
                     self.errors.push(e.into());
                 }
                 self.tokens.push(Token::Scope(scope));
             },
-            Token::End => {
+            CoreToken::End => {
                 if let Err(e) = self.end_scope() {
                     self.errors.push(e.into());
                 }
                 self.tokens.push(Token::End);
             },
-            Token::TypeHint(path, ty) => if let Err(e) = self.reg_placeholder(path, ty) {
+            CoreToken::TypeHint(path, ty) => if let Err(e) = self.reg_placeholder(path, ty) {
                 self.errors.push(e.into());
             },
         }

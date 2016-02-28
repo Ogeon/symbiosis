@@ -227,7 +227,6 @@ impl<'a> Codegen for JavaScript<'a> {
                         }
                     }
                 },
-                &Token::TypeHint(_, _) => { }
             }
         }
 
@@ -404,7 +403,6 @@ impl<'a> Codegen for JavaScript<'a> {
                             try_w!(func, "}}");
                         }
                     },
-                    &Token::TypeHint(_, _) => {}
                 }
 
                 Ok(())
@@ -572,7 +570,7 @@ fn write_attribute<'a, W: Write>(
                 try_w!(w, "{} += \"{}\";", var, content);
             }
         },
-        &Content::Placeholder(ref placeholder, _) => {
+        &Content::Placeholder(ref placeholder) => {
             match find_param(placeholder, params, structs, &scopes) {
                 Some((path, Some(&Type::Content(_)))) | Some((path, Some(&Type::Bool))) | Some((path, None)) => {
                     if new {
@@ -608,7 +606,7 @@ fn write_text<'a, W: Write>(
             try_w!(w, "{} += \"{}\";", var, Sanitized(content.to_string()));
             *state = TextState::HasContent;
         },
-        &Content::Placeholder(ref placeholder, _) => {
+        &Content::Placeholder(ref placeholder) => {
             match find_param(placeholder, params, structs, scopes) {
                 Some((path, Some(&Type::Content(_)))) | Some((path, Some(&Type::Bool))) | Some((path, None)) => {
                     try_w!(w, "if({} !== null) {{", path);
