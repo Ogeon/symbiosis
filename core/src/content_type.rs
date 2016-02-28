@@ -82,11 +82,11 @@ impl ContentType {
                     (&mut Some(_), None) |(&mut None, None)  => {}
                 };
             },
-            (&mut ContentType::Struct(ref mut a_n, ref mut a, ref mut a_o), ContentType::Struct(ref mut b_n, ref mut b, ref mut b_o)) => {
+            (&mut ContentType::Struct(ref mut a_n, ref mut a, ref mut a_o), ContentType::Struct(ref mut b_n, ref mut b, ref mut b_o)) if !(a_n.is_some() && b_n.is_some()) => {
                 if a_n.is_none() {
                     *a_n = b_n.take();
                 }
-                
+
                 *a_o = *a_o | *b_o;
 
                 for (name, ty) in b.drain() {
@@ -96,7 +96,9 @@ impl ContentType {
                     }
                 }
             },
-            (a, b) => return Err(format!("content cannot be used as both {} and {}", a, b))
+            (a, b) => {
+                return Err(format!("content cannot be used as both {} and {}", a, b));
+            }
         }
 
         Ok(())
@@ -142,7 +144,8 @@ impl fmt::Display for ContentType {
             &ContentType::Bool => "boolean value".fmt(f),
             &ContentType::Collection(Some(ref a), _) => write!(f, "collection of {}", a),
             &ContentType::Collection(None, _) => "collection of something".fmt(f),
-            &ContentType::Struct(_, _, _) => "data structure".fmt(f),
+            &ContentType::Struct(None, _, _) => "data structure".fmt(f),
+            &ContentType::Struct(Some(ref name), _, _) => write!(f, "data structure '{}'", name),
         }
     }
 }
@@ -263,5 +266,14 @@ impl<'a> IntoIterator for &'a Params {
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.iter()
+    }
+}
+
+impl IntoIterator for Params {
+    type IntoIter = <HashMap<StrTendril, ContentType> as IntoIterator>::IntoIter;
+    type Item = (StrTendril, ContentType);
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
     }
 }

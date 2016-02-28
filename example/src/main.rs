@@ -93,9 +93,12 @@ fn display_page(people: &RwLock<Vec<Person>>, context: Context, response: Respon
             //Display info about someone
             let person = &people[id];
             let more_info = templates::MoreInfo {
-                name: (&person.name).into(),
-                age: person.age.into(),
-                supervisor: person.supervisor.as_ref().map(Into::into),
+                card: templates::Card {
+                    id: id.into(),
+                    name: (&person.name).into(),
+                    age: person.age.into(),
+                    supervisor: person.supervisor.as_ref().map(Into::into),
+                },
                 projects: (&person.projects).into()
             };
             let document = templates::Document {

@@ -47,6 +47,12 @@ impl From<fmt::Error> for Error {
     }
 }
 
+impl From<parser::Error> for Error {
+    fn from(e: parser::Error) -> Error {
+        Error::Parse(vec![e])
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {

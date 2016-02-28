@@ -1,103 +1,68 @@
-use std::io::{self, Write};
+use std::io::Write;
+use std::collections::HashMap;
 
-use codegen::{Params, Writer, Line, ContentType};
+use codegen::{Writer, Line, Name, Type, Structs};
 
 use rust::Error;
 
-struct Struct<'a> {
-    entries: Vec<(&'a str, Type<'a>)>,
-    requires_lifetime: bool,
-}
-
-enum Type<'a> {
-    Content(bool),
-    Bool,
-    Struct(&'a str, bool, bool),
-    Collection(Box<Type<'a>>, bool),
-}
-
-impl<'a> Type<'a> {
-    fn requires_lifetime_param(&self) -> bool {
-        match *self {
-            Type::Content(_) => true,
-            Type::Bool => false,
-            Type::Struct(_, lifetime, _) => lifetime,
-            Type::Collection(_, _) => true,
-        }
-    }
-
-    fn is_optional(&self) -> bool {
-        match *self {
-            Type::Content(optional) => optional,
-            Type::Bool => false,
-            Type::Struct(_, _, optional) => optional,
-            Type::Collection(_, optional) => optional,
-        }
-    }
-}
-
-pub fn write_structs<W: Write>(writer: &mut Writer<W>, template_name: &str, params: &Params, public: bool) -> Result<bool, Error> {
-    let structs = params.flatten(template_name.into());
-
-    let mut requires_lifetime = false;
-
-    for (name, entries) in structs {
-        if name == template_name && entries.len() > 0 {
-            requires_lifetime = true;
-        }
-
+pub fn write_structs<W: Write>(writer: &mut Writer<W>, structs: Structs, public: bool) -> Result<(), Error> {
+    for s in structs {
         if public {
-            if entries.len() > 0 {
-                try_w!(writer, "pub struct {}<'a> {{", name);
+            if requires_lifetime(&s.fields) {
+                try_w!(writer, "pub struct {}<'a> {{", s.name);
             } else {
-                try_w!(writer, "pub struct {};", name);
+                try_w!(writer, "pub struct {};", s.name);
             }
         } else {
-            if entries.len() > 0 {
-                try_w!(writer, "struct {}<'a> {{", name);
+            if requires_lifetime(&s.fields) {
+                try_w!(writer, "struct {}<'a> {{", s.name);
             } else {
-                try_w!(writer, "struct {};", name);
+                try_w!(writer, "struct {};", s.name);
             }
         }
 
         {
             let mut block = writer.block();
-            for (parameter, ty) in &entries {
+            for (parameter, ty) in &s.fields {
                 let mut line = block.begin_line();
                 try_w!(line, "pub {}: ", parameter);
                 match write_ty(&mut line, ty) {
-                    Err(Error::UnknownType(_)) => return Err(Error::UnknownType(parameter.into())),
+                    Err(Error::UnknownType(_)) => return Err(Error::UnknownType((**parameter).into())),
                     r => try!(r)
                 }
                 try_w!(line, ",");
             }
         }
         
-        if entries.len() > 0 {
+        if s.fields.len() > 0 {
             try_w!(writer, "}}\n");
         }
     }
 
-    Ok(requires_lifetime)
+    Ok(())
 }
 
-fn write_ty<W: Write>(w: &mut Line<W>, ty: &ContentType) -> Result<(), Error> {
+pub fn requires_lifetime(params: &HashMap<Name, Type>) -> bool {
+    params.len() > 0
+}
+
+fn write_ty<W: Write>(w: &mut Line<W>, ty: &Type) -> Result<(), Error> {
     if ty.is_optional() {
         try_w!(w, "Option<");
     }
 
     match ty {
-        &ContentType::String(_) => try_w!(w, "::symbiosis_static::Content<'a>"),
-        &ContentType::Bool => try_w!(w, "bool"),
-        &ContentType::Collection(Some(ref inner), _) => {
+        &Type::Content(_) => try_w!(w, "::symbiosis_static::Content<'a>"),
+        &Type::Bool => try_w!(w, "bool"),
+        &Type::Collection(Some(ref inner), _) => {
             try_w!(w, "::symbiosis_static::Collection<'a, ");
             try!(write_ty(w, inner));
             try_w!(w, ">");
         },
-        &ContentType::Struct(Some(ref name), _, _) => {
+        &Type::Struct(ref name, _) => {
             try_w!(w, "{}<'a>", name);
         },
-        &ContentType::Collection(None, _) | &ContentType::Struct(None, _, _) => {
+        &Type::Collection(None, _) => {
             return Err(Error::UnknownType("".into()))
         },
     }

@@ -34,9 +34,11 @@ function show_info(id, new_state) {
 			more_info.removeChild(more_info.firstChild);
 		}
 
-		template.name = person.name;
-		template.age = person.age;
-		template.supervisor = person.supervisor;
+		template.card = {
+			name: person.name,
+			age: person.age,
+			supervisor: person.supervisor,
+		};
 		template.projects = person.projects;
 		template.render_to(more_info);
 		more_info_bg.style.display = "block";

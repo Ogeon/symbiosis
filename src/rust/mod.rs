@@ -2,10 +2,11 @@ use std::io::{self, Write};
 use std::fmt::Write as FmtWrite;
 use std::default::Default;
 use std::fmt;
+use std::collections::HashMap;
 
 use StrTendril;
 
-use codegen::{Codegen, Writer, Line, Logic, Token, Scope, ContentType, Content, Path, Params};
+use codegen::{Codegen, Writer, Line, Logic, Token, Scope, Content, Path, Structs, Name, Type};
 
 mod types;
 
@@ -18,7 +19,7 @@ pub enum Error {
     UnknownType(String),
     UndefinedPlaceholder(String),
     CannotBeRendered(String),
-    UnexpectedType(String, ContentType),
+    UnexpectedType(String, Type),
 
     Io(io::Error),
     Fmt(fmt::Error)
@@ -67,7 +68,7 @@ pub struct Rust<'a> {
 }
 
 impl<'a> Rust<'a> {
-    fn eval_logic<W: Write>(&self, w: &mut Line<W>, first: bool, cond: &Logic, params: &Params) -> Result<(), Error> {
+    fn eval_logic<W: Write>(&self, w: &mut Line<W>, first: bool, cond: &Logic, params: &'a HashMap<Name, Type>, structs: Structs<'a>, scopes: &[Option<ForEachLevel<'a>>]) -> Result<(), Error> {
         match cond {
             &Logic::And(ref conds) => {
                 if !first {
@@ -77,7 +78,7 @@ impl<'a> Rust<'a> {
                     if i > 0 {
                         try_w!(w, " && ");
                     }
-                    try!(self.eval_logic(w, false, cond, params));
+                    try!(self.eval_logic(w, false, cond, params, structs, scopes));
                 }
                 if !first {
                     try_w!(w, ")");
@@ -91,7 +92,7 @@ impl<'a> Rust<'a> {
                     if i > 0 {
                         try_w!(w, " || ");
                     }
-                    try!(self.eval_logic(w, false, cond, params));
+                    try!(self.eval_logic(w, false, cond, params, structs, scopes));
                 }
                 if !first {
                     try_w!(w, ")");
@@ -99,15 +100,16 @@ impl<'a> Rust<'a> {
             },
             &Logic::Not(ref cond) => {
                 try_w!(w, "!(");
-                try!(self.eval_logic(w, false, cond, params));
+                try!(self.eval_logic(w, false, cond, params, structs, scopes));
                 try_w!(w, ")");
             },
             &Logic::Value(ref val) => {
-                match params.get(val) {
-                    Some(&ContentType::String(false)) | Some(&ContentType::Collection(_, false)) | Some(&ContentType::Struct(_, _, false)) => try_w!(w, "true"),
-                    Some(&ContentType::String(true)) | Some(&ContentType::Collection(_, true)) | Some(&ContentType::Struct(_, _, true)) => try_w!(w, "self.{}.is_some()", val),
-                    Some(&ContentType::Bool) => try_w!(w, "self.{}", val),
-                    None => {}
+                match find_param(val, params, structs, scopes) {
+                    Some((_, Some((&Type::Content(_), false)))) | Some((_, Some((&Type::Collection(_, _), false)))) | Some((_, Some((&Type::Struct(_, _), false)))) => try_w!(w, "true"),
+                    Some((path, Some((&Type::Content(_), true)))) | Some((path, Some((&Type::Collection(_, _), true)))) | Some((path, Some((&Type::Struct(_, _), true)))) => try_w!(w, "{}.is_some()", path),
+                    Some((path, Some((&Type::Bool, false)))) => try_w!(w, "{}", path),
+                    Some((path, Some((&Type::Bool, true)))) => try_w!(w, "{} == Some(true)", path),
+                    None | Some((_, None)) => {}
                 }
             }
         }
@@ -131,19 +133,23 @@ impl<'a> Codegen for Rust<'a> {
     fn init_writer<'w, W: Write>(&self, w: &'w mut W) -> Writer<'w, W> {
         Writer::new(w, "    ")
     }
-    
-    fn build_template<W: Write>(&self, w: &mut Writer<W>, name: &str, params: &Params, tokens: &[Token]) -> Result<(), Error> {
+
+    fn build_structs<W: Write>(&self, w: &mut Writer<W>, structs: Structs) -> Result<(), Self::Error> {
         let public = match (&self.visibility, &self.named_module) {
             (&Visibility::Public, _) => true,
             (_, &Some(_)) => true,
             _ => false
         };
 
+        types::write_structs(w, structs, public)
+    }
+    
+    fn build_template<W: Write>(&self, w: &mut Writer<W>, name: &str, params: &HashMap<Name, Type>, structs: Structs, tokens: &[Token]) -> Result<(), Error> {
         let mut string_buf = String::new();
         let mut fmt_args = vec![];
         let mut scopes = vec![];
 
-        let has_lifetime = try!(types::write_structs(w, name, params, public));
+        let has_lifetime = types::requires_lifetime(params);
 
         if has_lifetime {
             try_w!(w, "impl<'a> ::std::fmt::Display for {}<'a> {{", name);
@@ -184,12 +190,12 @@ impl<'a> Codegen for Rust<'a> {
                     &Token::BeginAttribute(ref name, ref content) => match content {
                         &Content::String(ref content) => try_w_s!(string_buf, " {}=\\\"{}", name, content.to_string()),
                         &Content::Placeholder(ref placeholder, _) => {
-                            match find_param(placeholder, params, &scopes) {
-                                Some((access_path, Some((&ContentType::String(_), false)))) | Some((access_path, None)) => {
+                            match find_param(placeholder, params, structs, &scopes) {
+                                Some((access_path, Some((&Type::Content(_), false)))) | Some((access_path, None)) => {
                                     try_w_s!(string_buf, " {}=\\\"{{}}", name);
                                     fmt_args.push(access_path);
                                 },
-                                Some((access_path, Some((&ContentType::String(_), true)))) => {
+                                Some((access_path, Some((&Type::Content(_), true)))) => {
                                     try_w_s!(string_buf, " {}=\\\"", name);
                                     try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
 
@@ -198,8 +204,8 @@ impl<'a> Codegen for Rust<'a> {
                                     try_w!(func.indented_line(), "try!(write!(writer, \"{{}}\", val));");
                                     try_w!(func, "}}");
                                 },
-                                Some((_, Some(ty))) => {
-                                    println!("non-text type: {:?}", ty);
+                                Some((_, Some((ty, _)))) => {
+                                    println!("non-text type: {}", ty);
                                     return Err(Error::CannotBeRendered(placeholder.to_string()))
                                 },
                                 None => return Err(Error::UndefinedPlaceholder(placeholder.to_string()))
@@ -209,19 +215,19 @@ impl<'a> Codegen for Rust<'a> {
                     &Token::AppendToAttribute(ref text) | &Token::Text(ref text) => match text {
                         &Content::String(ref content) => try_w_s!(string_buf, "{}", content.to_string()),
                         &Content::Placeholder(ref placeholder, _) => {
-                            match find_param(placeholder, params, &scopes) {
-                                Some((access_path, Some((&ContentType::String(_), false)))) | Some((access_path, None)) => {
+                            match find_param(placeholder, params, structs, &scopes) {
+                                Some((access_path, Some((&Type::Content(_), false)))) | Some((access_path, None)) => {
                                     string_buf.push_str("{}");
                                     fmt_args.push(access_path);
                                 },
-                                Some((access_path, Some((&ContentType::String(_), true)))) => {
+                                Some((access_path, Some((&Type::Content(_), true)))) => {
                                     try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
                                     try_w!(func, "if let Some(ref val) = {} {{", access_path);
                                     try_w!(func.indented_line(), "try!(write!(writer, \"{{}}\", val));");
                                     try_w!(func, "}}");
                                 },
-                                Some((_, Some(ty))) => {
-                                    println!("non-text type: {:?}", ty);
+                                Some((_, Some((ty, _)))) => {
+                                    println!("non-text type: {}", ty);
                                     return Err(Error::CannotBeRendered(placeholder.to_string()))
                                 },
                                 None => return Err(Error::UndefinedPlaceholder(placeholder.to_string()))
@@ -236,7 +242,7 @@ impl<'a> Codegen for Rust<'a> {
                         {
                             let mut line = func.begin_line();
                             try_w!(line, "if ");
-                            try!(self.eval_logic(&mut line, true, &cond.flattened(), params));
+                            try!(self.eval_logic(&mut line, true, &cond.flattened(), params, structs, &scopes));
                             try_w!(line, " {{");
                         }
 
@@ -245,10 +251,10 @@ impl<'a> Codegen for Rust<'a> {
                     &Token::Scope(Scope::ForEach(ref collection, ref element, ref opt_key)) => {
                         try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
 
-                        match find_param(collection, params, &scopes) {
+                        match find_param(collection, params, structs, &scopes) {
                             Some((access_path, content_ty)) => {
                                 match content_ty {
-                                    Some((&ContentType::Collection(ref ty, _), optional)) => {
+                                    Some((&Type::Collection(ref ty, _), optional)) => {
                                         let mut line = func.begin_line();
 
                                         if let &Some(ref key) = opt_key {
@@ -285,8 +291,8 @@ impl<'a> Codegen for Rust<'a> {
                                             return Err(Error::UnknownType(collection.to_string()))
                                         }
                                     },
-                                    Some(_ty) => return Err(Error::UnexpectedType(collection.to_string(), ContentType::Collection(None, false))),
-                                    None => return Err(Error::UnexpectedType(collection.to_string(), ContentType::Collection(None, false)))
+                                    Some(_ty) => return Err(Error::UnexpectedType(collection.to_string(), Type::Collection(None, false))),
+                                    None => return Err(Error::UnexpectedType(collection.to_string(), Type::Collection(None, false)))
                                 }
                             },
                             None => return Err(Error::UndefinedPlaceholder(collection.to_string())),
@@ -363,14 +369,14 @@ fn write_and_clear_fmt<W: Write>(w: &mut Writer<W>, buf: &mut String, args: &mut
     Ok(())
 }
 
-fn find_param<'a>(path: &Path, params: &'a Params, scopes: &[Option<ForEachLevel<'a>>]) -> Option<(String, Option<(&'a ContentType, bool)>)> {
+fn find_param<'a>(path: &Path, params: &'a HashMap<Name, Type>, structs: Structs<'a>, scopes: &[Option<ForEachLevel<'a>>]) -> Option<(String, Option<(&'a Type, bool)>)> {
     let param = path.first().expect("empty path");
 
     for scope in scopes.iter().rev() {
         if let Some(ref for_each) = *scope {
             if *for_each.alias == **param {
                 let access_path = vec![(param, for_each.alias_type.is_optional())];
-                return make_access_path(path, access_path, for_each.alias_type);
+                return make_access_path(path, access_path, for_each.alias_type, structs);
             } else if let Some(ref key) = for_each.key {
                 if key == param {
                     if path.len() == 1 {
@@ -383,26 +389,26 @@ fn find_param<'a>(path: &Path, params: &'a Params, scopes: &[Option<ForEachLevel
         }
     }
 
-    if let Some(ty) = params.get(&param.clone().into()) {
-        make_access_path(path, vec![(&"self".into(), false), (param, ty.is_optional())], ty)
+    if let Some(ty) = params.get(&**param) {
+        make_access_path(path, vec![(&"self".into(), false), (param, ty.is_optional())], ty, structs)
     } else {
         None
     }
 }
 
-fn make_access_path<'a>(path: &Path, base: Vec<(&StrTendril, bool)>, base_type: &'a ContentType) -> Option<(String, Option<(&'a ContentType, bool)>)> {
+fn make_access_path<'a>(path: &Path, base: Vec<(&StrTendril, bool)>, base_type: &'a Type, structs: Structs<'a>) -> Option<(String, Option<(&'a Type, bool)>)> {
     let mut access_path = base;
     let mut current_type = Some(base_type);
 
     if path.len() > 1 {
         let mut current_params = match *base_type {
-            ContentType::Struct(_, ref params, _) => Some(params),
+            Type::Struct(ref name, _) => structs.get(name).map(|s| &s.fields),
             _ => return None,
         };
         let mut path = path[1..].iter();
 
         while let (Some(params), Some(part)) = (current_params.take(), path.next()) {
-            let next_type = if let Some(ty) = params.get(&part.clone().into()) {
+            let next_type = if let Some(ty) = params.get(&**part) {
                 ty
             } else {
                 return None;
@@ -410,7 +416,7 @@ fn make_access_path<'a>(path: &Path, base: Vec<(&StrTendril, bool)>, base_type: 
 
             access_path.push((part, next_type.is_optional()));
             current_params = match *next_type {
-                ContentType::Struct(_, ref params, _) => Some(params),
+                Type::Struct(ref name, _) => structs.get(name).map(|s| &s.fields),
                 _ => None,
             };
             current_type = Some(next_type);
@@ -418,7 +424,7 @@ fn make_access_path<'a>(path: &Path, base: Vec<(&StrTendril, bool)>, base_type: 
     }
 
     if let Some(ty) = current_type {
-        let mut result_type = ty.shallow_clone();
+        let mut result_type = ty.clone();
         let mut access_path = access_path.into_iter().rev();
         let mut path = access_path.next().map(|(name, _)| name.into()).unwrap_or(String::new());
 
@@ -463,6 +469,6 @@ impl<S> fmt::Display for Sanitized<S> where S: AsRef<str> {
 
 struct ForEachLevel<'a> {
     alias: StrTendril,
-    alias_type: &'a ContentType,
+    alias_type: &'a Type,
     key: Option<StrTendril>,
 }

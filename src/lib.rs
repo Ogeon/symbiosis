@@ -13,7 +13,8 @@ pub use symbiosis_tokenizer::{fragment, Error, StrTendril};
 use symbiosis_tokenizer::{Tokenizer, TokenSink};
 use symbiosis_tokenizer::parser;
 
-use codegen::{Token, Content, Codegen, ContentType, Scope, Path, Params};
+use codegen::{Token, Content, Codegen, Scope, Path, Type, Struct, StructName, Name};
+use codegen::core::{ContentType, Params};
 use fragment::{Fragment, FragmentStore};
 
 
@@ -25,6 +26,7 @@ pub mod rust;
 ///A collection of templates.
 pub struct TemplateGroup {
     templates: Vec<ParsedTemplate>,
+    structs: HashMap<Name, Struct>,
     fragments: HashMap<&'static str, Box<Fragment>>
 }
 
@@ -35,18 +37,22 @@ impl TemplateGroup {
 
         TemplateGroup {
             templates: vec![],
+            structs: HashMap::new(),
             fragments: fragments,
         }
     }
 
     ///Add a template from a string.
     pub fn parse_string<S: Into<StrTendril>>(&mut self, name: String, source: S) -> Result<(), Error> {
-        let mut template = Template::extending(&self.fragments);
-        try!(template.parse_string(source.into()));
+        let (params, tokens) = {
+            let mut template = Template::extending(&self.fragments);
+            try!(template.parse_string(source.into()));
+            (template.parameters, template.tokens)
+        };
+        try!(self.register_struct(StructName::Given(name.clone().into()), params));
         self.templates.push(ParsedTemplate {
             name: name,
-            parameters: template.parameters,
-            tokens: template.tokens
+            tokens: tokens
         });
 
         Ok(())
@@ -75,12 +81,13 @@ impl TemplateGroup {
     }
 
     ///Add an already parsed template to the group.
-    pub fn add_template(&mut self, name: String, template: Template) {
+    pub fn add_template(&mut self, name: String, template: Template) -> Result<(), Error> {
+        try!(self.register_struct(StructName::Given(name.clone().into()), template.parameters));
         self.templates.push(ParsedTemplate {
             name: name,
-            parameters: template.parameters,
             tokens: template.tokens
         });
+        Ok(())
     }
 
     ///Register a custom fragment.
@@ -93,17 +100,134 @@ impl TemplateGroup {
     pub fn emit_code<W: Write, C: Codegen>(&self, writer: &mut W, codegen: &C) -> Result<(), C::Error> {
         let mut writer = codegen.init_writer(writer);
         codegen.build_module(&mut writer, |w| {
+            let structs = (&self.structs).into();
+            try!(codegen.build_structs(w, structs));
             for template in &self.templates {
-                try!(codegen.build_template(w, &template.name, &template.parameters, &template.tokens));
+                let params = self.structs.get(&*template.name).expect("missing struct definition for template");
+                try!(codegen.build_template(w, &template.name, &params.fields, structs, &template.tokens));
             }
             Ok(())
+        })
+    }
+
+    fn register_struct(&mut self, name: StructName, parameters: Params) -> Result<(), parser::Error> {
+        let mut s = Struct {
+            name: name.clone(),
+            fields: HashMap::new(),
+        };
+
+        for (field_name, ty) in parameters {
+            let ty = try!(self.interpret_type(ty, || {
+                let mut new_name = String::from((*name).clone());
+                new_name.push_str(&field_name);
+                new_name.into()
+            }));
+
+            s.fields.insert(field_name.into(), ty);
+        }
+
+        let mut renames = vec![];
+
+        match self.structs.entry(name.into()) {
+            Entry::Occupied(e) => {
+                let e = e.into_mut();
+                if e.name.is_generated() {
+                    e.name = s.name;
+                }
+
+                for (field, ty) in s.fields {
+                    match e.fields.entry(field) {
+                        Entry::Occupied(e) => {
+                            let e = e.into_mut();
+                            if let Some(rename) = try!(e.merge_with(ty)) {
+                                renames.push(rename);
+                            }
+                        },
+                        Entry::Vacant(e) => {
+                            e.insert(ty);
+                        }
+                    }
+                }
+            },
+            Entry::Vacant(e) => {
+                e.insert(s);
+            }
+        }
+
+        while let Some((old, new)) = renames.pop() {
+            for (_, s) in &mut self.structs {
+                for (_, ty) in &mut s.fields {
+                    ty.rename_struct(&old, &new);
+                }
+            }
+
+            if let Some(mut s) = self.structs.remove(&old) {
+                if s.name.is_generated() {
+                    s.name = StructName::Given(new.clone());
+                } else {
+                    return Err(format!("could not use struct '{}' instead of '{}'", new, old).into());
+                }
+
+                match self.structs.entry(new) {
+                    Entry::Occupied(e) => {
+                        let e = e.into_mut();
+                        if e.name.is_generated() {
+                            e.name = s.name;
+                        }
+
+                        for (field, ty) in s.fields {
+                            match e.fields.entry(field) {
+                                Entry::Occupied(e) => {
+                                    let e = e.into_mut();
+                                    if let Some(rename) = try!(e.merge_with(ty)) {
+                                        renames.push(rename);
+                                    }
+                                },
+                                Entry::Vacant(e) => {
+                                    e.insert(ty);
+                                }
+                            }
+                        }
+                    },
+                    Entry::Vacant(e) => {
+                        e.insert(s);
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn interpret_type<F>(&mut self, ty: ContentType, gen_name: F) -> Result<Type, parser::Error> where
+        F: FnOnce() -> Name
+    {
+        Ok(match ty {
+            ContentType::Struct(None, fields, optional) => {
+                let name = gen_name();
+                try!(self.register_struct(StructName::Generated(name.clone()), fields));
+                Type::Struct(name, optional)
+            },
+            ContentType::Struct(Some(name), fields, optional) => {
+                let name = Name::from(name);
+                try!(self.register_struct(StructName::Given(name.clone()), fields));
+                Type::Struct(name, optional)
+            },
+            ContentType::String(optional) => Type::Content(optional),
+            ContentType::Bool => Type::Bool,
+            ContentType::Collection(Some(inner), optional) => {
+                let inner = try!(self.interpret_type(*inner, gen_name));
+                Type::Collection(Some(Box::new(inner)), optional)
+            },
+            ContentType::Collection(None, optional) => {
+                Type::Collection(None, optional)
+            },
         })
     }
 }
 
 struct ParsedTemplate {
     name: String,
-    parameters: Params,
     tokens: Vec<codegen::Token>
 }
 
@@ -162,11 +286,11 @@ impl<'a> Template<'a> {
         self.fragments.insert(fragment.identifier(), fragment);
     }
 
-    ///Write template code.
+    /*///Write template code.
     pub fn emit_code<W: Write, C: Codegen>(&self, template_name: &str, writer: &mut W, codegen: &C) -> Result<(), C::Error> {
         let mut writer = codegen.init_writer(writer);
         codegen.build_template(&mut writer, template_name, &self.parameters, &self.tokens)
-    }
+    }*/
 
     fn reg_scope_vars(&mut self, scope: &Scope) -> Result<(), Cow<'static, str>> {
         match scope {
@@ -310,10 +434,6 @@ enum ExtensibleMap<'a, K: 'a, V: 'a> {
 }
 
 impl<'a, K: Hash + Eq, V> ExtensibleMap<'a, K, V> {
-    pub fn new() -> ExtensibleMap<'a, K, V> {
-        ExtensibleMap::Owned(HashMap::new())
-    }
-
     pub fn extend(base: &'a HashMap<K, V>) -> ExtensibleMap<'a, K, V> {
         ExtensibleMap::Extended(base, HashMap::new())
     }

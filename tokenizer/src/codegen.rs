@@ -1,12 +1,14 @@
 use std::fmt;
 use std::ops::Deref;
+use std::hash::{Hash, Hasher};
+use std::borrow::Borrow;
 
 use StrTendril;
 use string_cache::atom::Atom;
 pub use html5ever::tokenizer::Doctype;
 pub use symbiosis_core::{Path, ContentType, Logic, Params};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq)]
 pub enum Name {
     Atom(Atom),
     Str(&'static str),
@@ -47,6 +49,16 @@ impl From<Name> for StrTendril {
     }
 }
 
+impl From<Name> for String {
+    fn from(name: Name) -> String {
+        match name {
+            Name::Atom(a) => (&*a).into(),
+            Name::Str(s) => s.into(),
+            Name::Tendril(t) => t.into(),
+        }
+    }
+}
+
 impl Deref for Name {
     type Target = str;
 
@@ -68,6 +80,24 @@ impl fmt::Display for Name {
 impl AsRef<str> for Name {
     fn as_ref(&self) -> &str {
         self
+    }
+}
+
+impl Borrow<str> for Name {
+    fn borrow(&self) -> &str {
+        self
+    }
+}
+
+impl PartialEq for Name {
+    fn eq(&self, other: &Name) -> bool {
+        (**self).eq(&**other)
+    }
+}
+
+impl Hash for Name {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (**self).hash(state)
     }
 }
 
