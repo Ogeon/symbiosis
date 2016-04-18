@@ -64,7 +64,11 @@ pub struct Rust<'a> {
     pub named_module: Option<(&'a str, Visibility)>,
 
     ///The template visibility. Defaults to public.
-    pub visibility: Visibility
+    pub visibility: Visibility,
+
+    ///The path to the `symbiosis_static` crate. Defaults to
+    ///`::symbiosis_static`.
+    pub symbiosis_path: Option<String>,
 }
 
 impl<'a> Rust<'a> {
@@ -122,7 +126,8 @@ impl<'a> Default for Rust<'a> {
     fn default() -> Rust<'a> {
         Rust {
             named_module: None,
-            visibility: Visibility::Public
+            visibility: Visibility::Public,
+            symbiosis_path: None,
         }
     }
 }
@@ -141,7 +146,7 @@ impl<'a> Codegen for Rust<'a> {
             _ => false
         };
 
-        types::write_structs(w, structs, public)
+        types::write_structs(w, structs, public, self.symbiosis_path.as_ref().map(|s| &**s).unwrap_or("::symbiosis_static"))
     }
     
     fn build_template<W: Write>(&self, w: &mut Writer<W>, name: &str, params: &HashMap<Name, Type>, structs: Structs, tokens: &[Token]) -> Result<(), Error> {
@@ -204,8 +209,7 @@ impl<'a> Codegen for Rust<'a> {
                                     try_w!(func.indented_line(), "try!(write!(writer, \"{{}}\", val));");
                                     try_w!(func, "}}");
                                 },
-                                Some((_, Some((ty, _)))) => {
-                                    println!("non-text type: {}", ty);
+                                Some((_, Some((_ty, _)))) => {
                                     return Err(Error::CannotBeRendered(placeholder.to_string()))
                                 },
                                 None => return Err(Error::UndefinedPlaceholder(placeholder.to_string()))
@@ -226,8 +230,7 @@ impl<'a> Codegen for Rust<'a> {
                                     try_w!(func.indented_line(), "try!(write!(writer, \"{{}}\", val));");
                                     try_w!(func, "}}");
                                 },
-                                Some((_, Some((ty, _)))) => {
-                                    println!("non-text type: {}", ty);
+                                Some((_, Some((_ty, _)))) => {
                                     return Err(Error::CannotBeRendered(placeholder.to_string()))
                                 },
                                 None => return Err(Error::UndefinedPlaceholder(placeholder.to_string()))
@@ -302,7 +305,7 @@ impl<'a> Codegen for Rust<'a> {
                     },
                     &Token::End => {
                         try!(try_write_and_clear_fmt(&mut func, &mut string_buf, &mut fmt_args));
-
+                        scopes.pop();
                         func.unindent();
                         try_w!(func, "}}");
                     },
@@ -333,6 +336,7 @@ impl<'a> Codegen for Rust<'a> {
         try!(build_templates(w));
 
         if self.named_module.is_some() {
+            w.unindent();
             try_w!(w, "}}");
         }
 
@@ -426,11 +430,16 @@ fn make_access_path<'a>(path: &Path, base: Vec<(&StrTendril, bool)>, base_type: 
         let mut result_type = ty.clone();
         let mut access_path = access_path.into_iter().rev();
         let mut path = access_path.next().map(|(name, _)| name.into()).unwrap_or(String::new());
+        let mut is_end = true;
 
         for (name, optional) in access_path {
             if optional {
                 if result_type.is_optional() {
-                    path = format!("{}.as_ref().and_then(|v| &v.{})", name, path);
+                    if is_end {
+                        path = format!("{}.as_ref().and_then(|v| v.{}.as_ref())", name, path);
+                    } else {
+                        path = format!("{}.as_ref().and_then(|v| v.{})", name, path);
+                    }
                 } else {
                     path = format!("{}.as_ref().map(|v| &v.{})", name, path);
                 }
@@ -438,6 +447,7 @@ fn make_access_path<'a>(path: &Path, base: Vec<(&StrTendril, bool)>, base_type: 
             } else {
                 path = format!("{}.{}", name, path);
             }
+            is_end = false;
         }
 
         Some((path, Some((ty, result_type.is_optional()))))
