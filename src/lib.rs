@@ -60,6 +60,12 @@ impl TemplateGroup {
         Ok(())
     }
 
+    pub fn parse_file<P: AsRef<path::Path>>(&mut self, name: String, file: P) -> Result<(), Error> {
+        let mut source = String::new();
+        try!(File::open(&file).and_then(|mut f| f.read_to_string(&mut source)));
+        self.parse_string(name, source)
+    }
+
     ///Add every `*.html` and `*.htm` file in a directory to the template group.
     pub fn parse_directory<P: AsRef<path::Path>>(&mut self, dir: P) -> Result<(), Error> {
         let directory = try!(read_dir(dir));
@@ -72,9 +78,7 @@ impl TemplateGroup {
             );
             if let (Some(name), Some(ext)) = info {
                 if ext == "html" || ext == "htm" {
-                    let mut source = String::new();
-                    try!(File::open(&path).and_then(|mut f| f.read_to_string(&mut source)));
-                    try!(self.parse_string(name.to_string(), source));
+                    try!(self.parse_file(name.into(), &path));
                 }
             }
         }
