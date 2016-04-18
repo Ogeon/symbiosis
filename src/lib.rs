@@ -130,7 +130,7 @@ impl TemplateGroup {
         for (field_name, ty) in parameters {
             let ty = try!(self.interpret_type(ty, || {
                 let mut new_name = String::from((*name).clone());
-                new_name.push_str(&field_name);
+                new_name.push_str(&to_camel_case(&field_name));
                 new_name.into()
             }));
 
@@ -475,4 +475,14 @@ impl<'a, K: Hash + Eq + Borrow<str> + From<&'static str>> FragmentStore for Exte
     fn insert(&mut self, fragment: Box<Fragment>) {
         self.insert(fragment.identifier().into(), fragment);
     }
+}
+
+fn to_camel_case(s: &str) -> String {
+    s.split(|c: char| !c.is_alphanumeric()).flat_map(|word| word.chars().enumerate().map(|(i, c)|
+        if i == 0 {
+            c.to_uppercase().collect::<String>()
+        } else {
+            c.to_lowercase().collect()
+        }
+    )).collect::<Vec<_>>().concat()
 }
