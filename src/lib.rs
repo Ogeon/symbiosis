@@ -116,6 +116,11 @@ impl TemplateGroup {
         })
     }
 
+    ///Get one of the generated structs.
+    pub fn get_struct(&self, name: &str) -> Option<&Struct> {
+        self.structs.get(name)
+    }
+
     fn register_struct(&mut self, name: StructName, parameters: Params) -> Result<(), parser::Error> {
         let mut s = Struct {
             name: name.clone(),
