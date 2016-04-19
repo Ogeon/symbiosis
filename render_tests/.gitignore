@@ -1,0 +1,4 @@
+tests/*/dynamic.html
+tests/*/static.html
+tests/*/javascript.html
+tests/*/main.js

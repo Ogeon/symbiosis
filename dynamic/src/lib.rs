@@ -59,19 +59,23 @@ impl Template {
                     };
 
                     if let Some(value) = value {
-                        let mut current_params = value.as_object();
-                        let mut current_value = None;
+                        if path.path.len() == 1 {
+                            return Some(value);
+                        } else {
+                            let mut current_params = value.as_object();
+                            let mut current_value = None;
 
-                        for part in &path.path[1..] {
-                            if let Some(params) = current_params.take() {
-                                current_value = params.get(&**part);
-                                current_params = current_value.and_then(Value::as_object);
-                            } else {
-                                return None;
+                            for part in &path.path[1..] {
+                                if let Some(params) = current_params.take() {
+                                    current_value = params.get(&**part);
+                                    current_params = current_value.and_then(Value::as_object);
+                                } else {
+                                    return None;
+                                }
                             }
-                        }
 
-                        return current_value;
+                            return current_value;
+                        }
                     }
 
                     current_scope = scope.previous;
@@ -161,23 +165,19 @@ impl<'a> TokenBuilder<'a> {
     }
 
     fn find(&self, path: Path) -> AccessPath {
-        {
-            let first = path.first().expect("found an empty path");
-
-            for &Scope { ref kind, .. } in self.scopes.iter().rev() {
-                if let ScopeKind::ForEach { ref key, ref alias, .. } = *kind {
-                    if alias == first {
+        for &Scope { ref kind, .. } in self.scopes.iter().rev() {
+            if let ScopeKind::ForEach { ref key, ref alias, .. } = *kind {
+                if alias == path.first().expect("found an empty path") {
+                    return AccessPath {
+                        path: path,
+                        kind: PathKind::Local,
+                    };
+                } else if let Some(ref key) = *key {
+                    if key == path.first().expect("found an empty path") {
                         return AccessPath {
-                            path: path[1..].to_owned().into(),
+                            path: path,
                             kind: PathKind::Local,
                         };
-                    } else if let Some(ref key) = *key {
-                        if key == first {
-                            return AccessPath {
-                                path: path[1..].to_owned().into(),
-                                kind: PathKind::Local,
-                            };
-                        }
                     }
                 }
             }

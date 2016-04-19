@@ -1,0 +1,15 @@
+<ul>{{ foreach(value in list) }}
+<li>{{ value }}</li>{{ end }}
+</ul>
+<ul>{{ foreach(value in map) }}
+<li>{{ value }}</li>{{ end }}
+</ul>
+<table>{{ foreach(key => value in list) }}
+<tr><td>{{ key }}</td><td>{{ value }}</td></tr>{{ end }}
+</table>
+<table>{{ foreach(key => value in map) }}
+<tr><td>{{ key }}</td><td>{{ value }}</td></tr>{{ end }}
+</table>
+<table>{{ foreach(key => list in table) }}
+<tr><td>{{ key }}</td>{{ foreach(item in list) }}<td>{{ item }}</td>{{ end }}</tr>{{ end }}
+</table>

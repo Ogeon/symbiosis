@@ -2,10 +2,15 @@ language: rust
 os:
   - linux
   - osx
+branches:
+  only:
+    - master
+    - auto
 script:
-  - cargo test
-  - cd pattern
-  - cargo test
+  - mkdir target
+  - cd render_tests
+  - bash run.sh
+  - cd ../pattern
   - cargo doc
   - mkdir ../tokenizer/target
   - mv target/doc/ ../tokenizer/target/doc
@@ -15,12 +20,10 @@ script:
   - mkdir ../dynamic/target
   - mv target/doc/ ../dynamic/target/doc
   - cd ../dynamic
-  - cargo test
   - cargo doc
   - mkdir ../static/target
   - mv target/doc/ ../static/target/doc
   - cd ../static
-  - cargo test
   - cargo doc
   - mv target/doc/ ../target/doc
   - cd ../example

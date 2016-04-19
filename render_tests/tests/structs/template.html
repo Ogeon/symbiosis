@@ -1,0 +1,26 @@
+{{ struct_name(user is "User") }}<h1>{{ user.name }}</h1>
+<table>
+<tr><td>Age:</td><td>{{ user.age }}</td></tr>
+<tr><td>City:</td><td>{{ user.city }}</td></tr>
+</table>
+
+<h2>Mother</h2>{{ struct_name(family.mother is "User") }}
+<table>
+<tr><td>Name:</td><td>{{ family.mother.name }}</td></tr>
+<tr><td>Age:</td><td>{{ family.mother.age }}</td></tr>
+<tr><td>City:</td><td>{{ family.mother.city }}</td></tr>
+</table>
+
+<h2>Father</h2>{{ struct_name(family.father is "User") }}
+<table>
+<tr><td>Name:</td><td>{{ family.father.name }}</td></tr>
+<tr><td>Age:</td><td>{{ family.father.age }}</td></tr>
+<tr><td>City:</td><td>{{ family.father.city }}</td></tr>
+</table>
+
+<h2>Siblings</h2>{{ foreach(sibling in family.siblings) }}{{ struct_name(sibling is "User") }}
+<table>
+<tr><td>Name:</td><td>{{ sibling.name }}</td></tr>
+<tr><td>Age:</td><td>{{ sibling.age }}</td></tr>
+<tr><td>City:</td><td>{{ sibling.city }}</td></tr>
+</table>{{ end }}
