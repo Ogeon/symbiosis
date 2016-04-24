@@ -1,0 +1,31 @@
+{
+	"user": {
+		"name": "Kim",
+		"age": 24,
+		"city": "Gotham"
+	},
+	"family": {
+		"mother": {
+			"name": "Jane",
+			"age": 52,
+			"city": "Metropolis"
+		},
+		"father": {
+			"name": "John",
+			"age": 59,
+			"city": "Metropolis"
+		},
+		"siblings": [
+			{
+				"name": "Bruce",
+				"age": 30,
+				"city": "Gotham"
+			},
+			{
+				"name": "Beth",
+				"age": 28,
+				"city": "Metropolis"
+			}
+		]
+	}
+}

@@ -1,0 +1,20 @@
+[package]
+name = "render_tests"
+version = "0.0.1"
+authors = ["Erik Hedvall <hello@erikhedvall.nu>"]
+build = "build.rs"
+
+[dependencies]
+serde_json = "0.7"
+
+[dependencies.symbiosis_static]
+path = "../static"
+
+[dependencies.symbiosis_dynamic]
+path = "../dynamic"
+
+[build-dependencies]
+serde_json = "0.7"
+
+[build-dependencies.symbiosis]
+path = ".."

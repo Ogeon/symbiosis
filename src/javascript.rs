@@ -407,6 +407,10 @@ impl<'a> Codegen for JavaScript<'a> {
 
                 Ok(())
             }));
+
+            if let (Some(Some((ref text_var, ref mut state))), Some(tag)) = (text.pop(), tags.last()) {
+                try!(append_text(&mut func, text_var, state, tag));
+            }
         } else {
             return Err(Error::TooManyEnd);
         }
