@@ -7,7 +7,7 @@ use std::borrow::Borrow;
 
 pub use symbiosis_tokenizer::codegen::{Name, Text, Path, Logic, Scope, Doctype};
 
-use symbiosis_tokenizer::parser::Error;
+use fragment;
 use StrTendril;
 
 pub enum Token {
@@ -185,7 +185,7 @@ pub enum Type {
 }
 
 impl Type {
-    pub fn merge_with(&mut self, other: Type) -> Result<Option<(Name, Name)>, Error> {
+    pub fn merge_with(&mut self, other: Type) -> Result<Option<(Name, Name)>, fragment::Error> {
         let rename = match (self, other) {
             (this, Type::Bool) => {
                 this.set_optional(true);

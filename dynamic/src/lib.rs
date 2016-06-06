@@ -14,7 +14,7 @@ use symbiosis_tokenizer::codegen::Scope as CoreScope;
 use symbiosis_tokenizer::codegen::Logic as CoreLogic;
 use symbiosis_tokenizer::codegen::{Path, Content};
 use symbiosis_tokenizer::fragment::{Fragment, FragmentStore, init_prelude};
-use symbiosis_tokenizer::fragment::pattern::Argument;
+use symbiosis_tokenizer::fragment::Parser as FragmentParser;
 
 pub use symbiosis_tokenizer::fragment;
 
@@ -142,7 +142,7 @@ impl Parser {
         self.fragments.insert(fragment.identifier(), Box::new(fragment));
     }
 
-    pub fn register_fragment_fn(&mut self, name: &'static str, function: fn(Vec<Argument>) -> Result<fragment::ReturnType, fragment::Error>) {
+    pub fn register_fragment_fn(&mut self, name: &'static str, function: fn(&mut FragmentParser) -> Result<fragment::ReturnType, fragment::Error>) {
         self.register_fragment((name, function));
     }
 }

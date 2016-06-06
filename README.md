@@ -142,14 +142,6 @@ fn template_stuff(src: String) {
 }
 ```
 
-### [`symbiosis_pattern`](http://ogeon.github.io/docs/symbiosis/master/symbiosis_pattern)
-
-The input to a fragment is interpreted using a `Pattern`. These patterns will
-usually not change during the course of the program, so it's possible to have
-both static parsing and validation. `symbiosis_pattern` is a code generator,
-which generates Rust code for both the pattern and a decoder, which decodes
-the input as a data structure.
-
 ### [`symbiosis_tokenizer`](http://ogeon.github.io/docs/symbiosis/master/symbiosis_tokenizer)
 
 This is the heart of the whole system. The tokenizer interprets the HTML

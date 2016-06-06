@@ -1,6 +1,5 @@
 extern crate html5ever;
 extern crate string_cache;
-extern crate lalrpop_util;
 extern crate symbiosis_core;
 
 use std::mem::replace;
@@ -19,20 +18,22 @@ use string_cache::Atom;
 use codegen::{Token, Content, Name, Text};
 use fragment::{ReturnType, FragmentStore};
 
+use fragment::Error as ParseError;
+
 //haxx
 mod symbiosis_tokenizer {
     pub use super::*;
 }
+mod parser;
 
 pub mod codegen;
-pub mod parser;
 pub mod fragment;
 
 #[derive(Debug)]
 pub enum Error {
     Io(io::Error),
     Format(fmt::Error),
-    Parse(Vec<parser::Error>)
+    Parse(Vec<ParseError>),
 }
 
 impl From<io::Error> for Error {
@@ -47,8 +48,8 @@ impl From<fmt::Error> for Error {
     }
 }
 
-impl From<parser::Error> for Error {
-    fn from(e: parser::Error) -> Error {
+impl From<ParseError> for Error {
+    fn from(e: ParseError) -> Error {
         Error::Parse(vec![e])
     }
 }
@@ -71,7 +72,7 @@ impl fmt::Display for Error {
 
 pub struct Tokenizer<T: TokenSink> {
     sink: T,
-    errors: Vec<parser::Error>,
+    errors: Vec<ParseError>,
     parser_state: Option<State>,
     escape: bool,
 }
@@ -107,7 +108,7 @@ impl<T: TokenSink> Tokenizer<T> {
         self.sink.process_token(Token::Comment(comment));
     }
 
-    fn add_text(&mut self, text: StrTendril) -> Result<(), parser::Error> {
+    fn add_text(&mut self, text: StrTendril) -> Result<(), ParseError> {
         for ret in try!(parser::parse_content(text, self.sink.fragments())) {
             match ret {
                 ReturnType::String(text) => self.sink.process_token(Token::Text(Content::String(Text::new(text, self.escape, false)))),
@@ -123,7 +124,7 @@ impl<T: TokenSink> Tokenizer<T> {
         Ok(())
     }
 
-    fn open_tag(&mut self, name: Atom, attributes: Vec<Attribute>, self_closing: bool) -> Result<(), parser::Error> {
+    fn open_tag(&mut self, name: Atom, attributes: Vec<Attribute>, self_closing: bool) -> Result<(), ParseError> {
         self.sink.process_token(Token::BeginTag(name.clone().into()));
 
         for attribute in attributes {
@@ -186,7 +187,7 @@ impl<T: TokenSink> Tokenizer<T> {
         self.escape = true;
     }
 
-    fn add_tag_tree(&mut self, name: Name, arguments: Vec<(Name, Vec<ReturnType>)>, content: Option<Vec<ReturnType>>) -> Result<(), parser::Error> {
+    fn add_tag_tree(&mut self, name: Name, arguments: Vec<(Name, Vec<ReturnType>)>, content: Option<Vec<ReturnType>>) -> Result<(), ParseError> {
         self.sink.process_token(Token::BeginTag(name.clone()));
 
         for (attr, content) in arguments {

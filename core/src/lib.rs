@@ -1,5 +1,4 @@
 extern crate tendril;
-extern crate lalrpop_util;
 
 use std::fmt;
 use std::ops::Deref;
@@ -10,20 +9,6 @@ pub use content_type::{ContentType, Params, Logic};
 
 mod slicer;
 mod content_type;
-pub mod pattern;
-
-#[derive(Debug, Clone)]
-pub enum FragmentKind {
-    Placeholder(Path),
-    Function(StrTendril, Vec<Input>),
-}
-
-#[derive(Debug, Clone)]
-pub enum Input {
-    Fragment(FragmentKind),
-    String(StrTendril),
-    Other(StrTendril),
-}
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Path(Vec<StrTendril>);

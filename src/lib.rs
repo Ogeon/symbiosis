@@ -11,7 +11,6 @@ use std::mem::swap;
 
 pub use symbiosis_tokenizer::{fragment, Error, StrTendril};
 use symbiosis_tokenizer::{Tokenizer, TokenSink};
-use symbiosis_tokenizer::parser;
 use symbiosis_tokenizer::codegen::{ContentType, Params};
 use symbiosis_tokenizer::codegen::Token as CoreToken;
 use symbiosis_tokenizer::codegen::Content as CoreContent;
@@ -121,7 +120,7 @@ impl TemplateGroup {
         self.structs.get(name)
     }
 
-    fn register_struct(&mut self, name: StructName, parameters: Params) -> Result<(), parser::Error> {
+    fn register_struct(&mut self, name: StructName, parameters: Params) -> Result<(), fragment::Error> {
         let mut s = Struct {
             name: name.clone(),
             fields: HashMap::new(),
@@ -210,7 +209,7 @@ impl TemplateGroup {
         Ok(())
     }
 
-    fn interpret_type<F>(&mut self, ty: ContentType, gen_name: F) -> Result<Type, parser::Error> where
+    fn interpret_type<F>(&mut self, ty: ContentType, gen_name: F) -> Result<Type, fragment::Error> where
         F: FnOnce() -> Name
     {
         Ok(match ty {
@@ -248,7 +247,7 @@ pub struct Template<'a> {
     parameters: Params,
     tokens: Vec<codegen::Token>,
     scopes: Vec<Option<(Path, StrTendril, Option<ContentType>, Option<StrTendril>)>>,
-    errors: Vec<parser::Error>,
+    errors: Vec<fragment::Error>,
 }
 
 impl<'a> Template<'a> {
