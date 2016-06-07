@@ -1,14 +1,7 @@
-extern crate tendril;
-
-use std::fmt;
 use std::ops::Deref;
+use std::fmt;
 
-pub use tendril::StrTendril;
-pub use slicer::Slicer;
-pub use content_type::{ContentType, Params, Logic};
-
-mod slicer;
-mod content_type;
+use StrTendril;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Path(Vec<StrTendril>);

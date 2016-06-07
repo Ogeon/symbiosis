@@ -9,6 +9,4 @@ name = "symbiosis_tokenizer"
 [dependencies]
 html5ever = "0.5"
 string_cache = "0.2"
-
-[dependencies.symbiosis_core]
-path = "../core"
+tendril = "0.2"

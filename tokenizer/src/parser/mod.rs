@@ -4,9 +4,11 @@ use std::fmt;
 use StrTendril;
 
 use fragment::{Fragment, FragmentStore, InputType, ReturnType};
-use codegen::ContentType;
+use codegen::{ContentType, Path};
 
-pub use symbiosis_core::{Slicer, Path};
+use self::slicer::Slicer;
+
+mod slicer;
 
 #[derive(Debug)]
 pub enum ErrorKind {

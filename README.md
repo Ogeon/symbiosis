@@ -147,9 +147,3 @@ fn template_stuff(src: String) {
 This is the heart of the whole system. The tokenizer interprets the HTML
 generates the token stream, and it's what powers both the static and the
 dynamic templates.
-
-### [`symbiosis_core`](http://ogeon.github.io/docs/symbiosis/master/symbiosis_core)
-
-The core library is a utility library, where many of the basic types are
-defined. It's not meant for direct use, but it's still there if anyone needs
-it.

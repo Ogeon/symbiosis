@@ -1,12 +1,12 @@
 extern crate html5ever;
 extern crate string_cache;
-extern crate symbiosis_core;
+extern crate tendril;
 
 use std::mem::replace;
 use std::fmt;
 use std::io;
 
-pub use symbiosis_core::StrTendril;
+pub use tendril::StrTendril;
 
 use html5ever::Attribute;
 use html5ever::tokenizer::{Tag, TagKind, Doctype};
