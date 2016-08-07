@@ -4,12 +4,10 @@ extern crate rand;
 extern crate rustc_serialize;
 
 use std::str::FromStr;
-use std::io::Read;
 use std::path::Path;
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 use std::cmp::max;
-use std::error::Error;
 
 use symbiosis_static::Generator;
 

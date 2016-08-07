@@ -3,7 +3,7 @@ use std::fmt;
 
 use StrTendril;
 
-use fragment::{Fragment, FragmentStore, InputType, ReturnType};
+use fragment::{FragmentStore, InputType, ReturnType};
 use codegen::{ContentType, Path};
 
 use self::slicer::Slicer;
