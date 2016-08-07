@@ -5,7 +5,7 @@ authors = ["Erik Hedvall <hello@erikhedvall.nu>"]
 build = "build.rs"
 
 [dependencies]
-serde_json = "0.7"
+serde_json = "0.8"
 
 [dependencies.symbiosis_static]
 path = "../static"
@@ -14,7 +14,7 @@ path = "../static"
 path = "../dynamic"
 
 [build-dependencies]
-serde_json = "0.7"
+serde_json = "0.8"
 
 [build-dependencies.symbiosis]
 path = ".."

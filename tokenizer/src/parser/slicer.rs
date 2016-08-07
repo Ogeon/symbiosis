@@ -1,5 +1,3 @@
-use std::cmp::min;
-
 use tendril::StrTendril;
 
 pub struct Slicer {
@@ -76,24 +74,6 @@ impl Slicer {
         self.length
     }
 
-    pub fn offset(&self) -> u32 {
-        self.offset
-    }
-
-    pub fn jump_to(&mut self, offset: u32) {
-        self.offset = min(offset, self.src.len32());
-        self.length = 0;
-    }
-
-    pub fn jump_back_by(&mut self, offset: u32) {
-        if offset > self.offset {
-            self.offset = 0;
-        } else {
-            self.offset -= offset;
-        }
-        self.length = 0;
-    }
-
     pub fn skip_whitespace(&mut self) {
         while let Some(c) = self.next() {
             if !(c as char).is_whitespace() {
@@ -113,40 +93,5 @@ impl Slicer {
         }
 
         None
-    }
-
-    pub fn eat(&mut self, byte: u8) -> bool {
-        match self.next() {
-            Some(c) if c == byte => {
-                self.discard();
-                true
-            },
-            Some(_) => {
-                self.go_back();
-                false
-            },
-            None => false
-        }
-    }
-
-    pub fn eat_bytes(&mut self, bytes: &[u8]) -> bool {
-        let snapshot = self.length;
-
-        for &byte in bytes {
-            match self.next() {
-                Some(c) => if c != byte {
-                    self.length = snapshot;
-                    return false;
-                },
-                None => {
-                    self.length = snapshot;
-                    return false;
-                }
-            }
-        }
-
-        self.discard();
-        
-        true
     }
 }

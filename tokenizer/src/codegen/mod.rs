@@ -6,7 +6,11 @@ use std::borrow::Borrow;
 use StrTendril;
 use string_cache::atom::Atom;
 pub use html5ever::tokenizer::Doctype;
-pub use symbiosis_core::{Path, ContentType, Logic, Params};
+pub use self::content_type::{ContentType, Logic, Params};
+pub use self::path::Path;
+
+mod path;
+mod content_type;
 
 #[derive(Clone, Debug, Eq)]
 pub enum Name {

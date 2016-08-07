@@ -3,68 +3,106 @@ use std::fmt;
 
 use StrTendril;
 
-use fragment::{self, Fragment, FragmentStore, InputType, ReturnType};
-use codegen::ContentType;
+use fragment::{FragmentStore, InputType, ReturnType};
+use codegen::{ContentType, Path};
 
-use lalrpop_util::ParseError as LalrpopError;
+use self::slicer::Slicer;
 
-pub use symbiosis_core::{Input, FragmentKind, Slicer};
-
-mod grammar;
-
-pub type ParseError = LalrpopError<(), Token, ()>;
-
+mod slicer;
 
 #[derive(Debug)]
-pub enum Error {
-    Fragment(fragment::Error),
-    Parse(ParseError),
+pub enum ErrorKind {
+    ExpectedIdentifier(Option<Token>),
+    ExpectedString(Option<Token>),
+    ExpectedToken(Token, Option<Token>),
     Other(Cow<'static, str>),
 }
 
-impl fmt::Display for Error {
+impl fmt::Display for ErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            Error::Fragment(ref e) => write!(f, "during fragment expansion: {}", e),
-            Error::Parse(ref e) => match *e {
-                LalrpopError::InvalidToken { .. } => write!(f, "parse error: invalid token"),
-                LalrpopError::UnrecognizedToken { token: None, .. } => write!(f, "parse error: unrecognized token"),
-                LalrpopError::UnrecognizedToken { token: Some((_, ref t, _)), .. } => write!(f, "parse error: unrecognized token {:?}", t),
-                LalrpopError::ExtraToken { token: (_, ref t, _), .. } => write!(f, "parse error: extra token {:?}", t),
-                LalrpopError::User { ref error } => write!(f, "parse error: {:?}", error),
+            ErrorKind::ExpectedIdentifier(ref token) => {
+                try!(f.write_str("expected an identifier, but found "));
+                if let Some(ref token) = *token {
+                    write!(f, "{}", token)
+                } else {
+                    f.write_str("nothing")
+                }
             },
-            Error::Other(ref e) => write!(f, "while parsing: {}", e)
+            ErrorKind::ExpectedString(ref token) => {
+                try!(f.write_str("expected a string literal, but found "));
+                if let Some(ref token) = *token {
+                    write!(f, "{}", token)
+                } else {
+                    f.write_str("nothing")
+                }
+            },
+            ErrorKind::ExpectedToken(ref expected, ref found) => {
+                try!(write!(f, "expected {}, but found ", expected));
+                if let Some(ref token) = *found {
+                    write!(f, "{}", token)
+                } else {
+                    f.write_str("nothing")
+                }
+            },
+            ErrorKind::Other(ref e) => e.fmt(f),
         }
     }
 }
 
-impl From<fragment::Error> for Error {
-    fn from(error: fragment::Error) -> Error {
-        Error::Fragment(error)
+impl From<&'static str> for ErrorKind {
+    fn from(error: &'static str) -> ErrorKind {
+        ErrorKind::Other(error.into())
     }
 }
 
-impl From<ParseError> for Error {
-    fn from(error: LalrpopError<(), Token, ()>) -> Error {
-        Error::Parse(error)
+impl From<String> for ErrorKind {
+    fn from(error: String) -> ErrorKind {
+        ErrorKind::Other(error.into())
     }
 }
 
-impl From<&'static str> for Error {
-    fn from(error: &'static str) -> Error {
-        Error::Other(error.into())
+impl From<Cow<'static, str>> for ErrorKind {
+    fn from(error: Cow<'static, str>) -> ErrorKind {
+        ErrorKind::Other(error)
     }
 }
 
-impl From<String> for Error {
-    fn from(error: String) -> Error {
-        Error::Other(error.into())
+#[derive(Debug)]
+pub struct Error {
+    callstack: Vec<Cow<'static, str>>,
+    kind: ErrorKind
+}
+
+impl Error {
+    fn add_callee<T: Into<Cow<'static, str>>>(&mut self, callee: T) {
+        self.callstack.push(callee.into())
     }
 }
 
-impl From<Cow<'static, str>> for Error {
-    fn from(error: Cow<'static, str>) -> Error {
-        Error::Other(error)
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self.callstack.len() > 0 {
+            try!(f.write_str("error when calling "));
+            for (i, fragment) in self.callstack.iter().enumerate() {
+                if i > 0 {
+                    try!(f.write_str(" in "));
+                }
+                try!(write!(f, "'{}'", fragment));
+            }
+            try!(f.write_str(": "));
+        }
+
+        self.kind.fmt(f)
+    }
+}
+
+impl<T: Into<ErrorKind>> From<T> for Error {
+    fn from(error: T) -> Error {
+        Error {
+            callstack: vec![],
+            kind: error.into(),
+        }
     }
 }
 
@@ -82,21 +120,19 @@ pub fn parse_content(content: StrTendril, fragments: &FragmentStore) -> Result<V
                         content.discard();
                     }
 
-                    let fragment = try!(grammar::parse_Fragment(Tokenizer::new(&mut content)));
-                    let ret = match try!(eval_fragment(&fragment, fragments)) {
+                    let mut tokenizer = Tokenizer::new(&mut content);
+                    let mut parser = Parser {
+                        tokenizer: &mut tokenizer,
+                        fragments: fragments,
+                    };
+
+                    let ret = match try!(parser.outer_fragment()) {
                         ReturnType::Placeholder(ref path, _) if &**path == &["end".into()] => ReturnType::End,
                         ret => ret,
                     };
                     tokens.push(ret);
 
-                    content.skip_whitespace();
-                    if !content.eat_bytes(b"}}") {
-                        if let Some(c) = content.next_char() {
-                            return Err(format!("expected '}}}}', but found '{}'", c).into());
-                        } else {
-                            return Err("expected '}}', but found nothing".into());
-                        }
-                    }
+                    try!(parser.token(Token::CloseBrace).and_then(|_| parser.token(Token::CloseBrace)));
                 },
                 None => break,
                 _ => {}
@@ -118,56 +154,66 @@ pub fn parse_content(content: StrTendril, fragments: &FragmentStore) -> Result<V
     Ok(tokens)
 }
 
-fn eval_fragment(fragment: &FragmentKind, fragments: &FragmentStore) -> Result<ReturnType, fragment::Error> {
-    match *fragment {
-        FragmentKind::Function(ref name, ref args) => {
-            if let Some(fragment) = fragments.get(&**name) {
-                let pattern = fragment.pattern();
-                pattern.parse(args, |inner| match try!(eval_fragment(inner, fragments)) {
-                        ReturnType::Placeholder(name, ty) => Ok(InputType::Placeholder(name, ty)),
-                        ReturnType::Logic(cond) => Ok(InputType::Logic(cond)),
-                        _ => Err("inner fragments must only return placeholders and logic".into())
-                    })
-                    .and_then(|args| fragment.process(args))
-                    .map_err(|mut e| {
-                        e.add_callee(fragment.identifier());
-                        e
-                    })
-            } else {
-                Err(format!("'{}' is not a registered fragment", name).into())
-            }
-        },
-        FragmentKind::Placeholder(ref path) => Ok(ReturnType::Placeholder(path.clone(), ContentType::String(false)))
+fn eval_fragment(name: &str, parser: &mut Parser) -> Result<ReturnType, Error> {
+    if let Some(fragment) = parser.fragments.get(name) {
+        fragment.process(parser).map_err(|mut e| {
+            e.add_callee(fragment.identifier());
+            e
+        })
+    } else {
+        Err(format!("'{}' is not a registered fragment", name).into())
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Ident(StrTendril),
     Period,
     OpenParen,
     CloseParen,
+    OpenBrace,
+    CloseBrace,
     String(StrTendril),
     Other(StrTendril),
-    FragmentEnd,
+}
+
+impl fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Token::Ident(ref ident) => write!(f, "the identifier '{}'", ident),
+            Token::Period => f.write_str("'.'"),
+            Token::OpenParen => f.write_str("'('"),
+            Token::CloseParen => f.write_str("')'"),
+            Token::OpenBrace => f.write_str("'{'"),
+            Token::CloseBrace => f.write_str("'}'"),
+            Token::String(ref string) => write!(f, "the string {:?}", &**string),
+            Token::Other(ref token) => write!(f, "the token {:?}", &**token),
+        }
+    }
 }
 
 struct Tokenizer<'a> {
     source: &'a mut Slicer,
+    peeked: Option<Token>
 }
 
 impl<'a> Tokenizer<'a> {
     fn new(source: &mut Slicer) -> Tokenizer {
         Tokenizer {
-            source: source
+            source: source,
+            peeked: None,
         }
     }
-}
 
-impl<'a> Iterator for Tokenizer<'a> {
-    type Item = Token;
+    fn peek(&mut self) -> Option<Token> {
+        if self.peeked.is_none() {
+            self.peeked = self.next_token();
+        }
 
-    fn next(&mut self) -> Option<Token> {
+        self.peeked.clone()
+    }
+
+    fn next_token(&mut self) -> Option<Token> {
         self.source.skip_whitespace();
 
         match self.source.next_char() {
@@ -182,6 +228,14 @@ impl<'a> Iterator for Tokenizer<'a> {
             Some(')') => {
                 self.source.discard();
                 Some(Token::CloseParen)
+            },
+            Some('{') => {
+                self.source.discard();
+                Some(Token::OpenBrace)
+            },
+            Some('}') => {
+                self.source.discard();
+                Some(Token::CloseBrace)
             },
             Some('"') => {
                 let mut escaped = false;
@@ -223,30 +277,33 @@ impl<'a> Iterator for Tokenizer<'a> {
                 }
             },
             Some(c) => {
-                if c == '}' && self.source.eat(b'}') {
-                    self.source.jump_back_by(2);
-                    None
-                } else {
-                    let mut is_ident = c.is_alphabetic() || c == '_';
-                    let token = self.source.take_while(|c| {
-                        let c = c as char; //not necessarily optimal
-                        if !is_delimiter(c) && !c.is_whitespace() {
-                            is_ident = is_ident && (c.is_alphabetic() || c.is_numeric() || c == '_');
-                            true
-                        } else {
-                            false
-                        }
-                    });
-
-                    token.map(|t| if is_ident {
-                        Token::Ident(t)
+                let mut is_ident = c.is_alphabetic() || c == '_';
+                let token = self.source.take_while(|c| {
+                    let c = c as char; //not necessarily optimal
+                    if !is_delimiter(c) && !c.is_whitespace() {
+                        is_ident = is_ident && (c.is_alphabetic() || c.is_numeric() || c == '_');
+                        true
                     } else {
-                        Token::Other(t)
-                    })
-                }
+                        false
+                    }
+                });
+
+                token.map(|t| if is_ident {
+                    Token::Ident(t)
+                } else {
+                    Token::Other(t)
+                })
             },
-            None => None 
+            None => None
         }
+    }
+}
+
+impl<'a> Iterator for Tokenizer<'a> {
+    type Item = Token;
+
+    fn next(&mut self) -> Option<Token> {
+        self.peeked.take().or_else(|| self.next_token())
     }
 }
 
@@ -254,5 +311,88 @@ fn is_delimiter(c: char) -> bool {
     match c {
         '.' | ':' | ',' | ';' | '(' | ')' | '[' | ']' | '{' | '}' => true,
         _ => false,
+    }
+}
+
+pub struct Parser<'a>{
+    fragments: &'a FragmentStore,
+    tokenizer: &'a mut Tokenizer<'a>,
+}
+
+impl<'a> Parser<'a> {
+    pub fn input(&mut self) -> Result<InputType, Error> {
+        let first = try!(self.identifier());
+        match self.token(Token::OpenParen) {
+            Ok(_) => {
+                let input = match try!(eval_fragment(&first, self)) {
+                    ReturnType::Placeholder(name, ty) => InputType::Placeholder(name, ty),
+                    ReturnType::Logic(cond) => InputType::Logic(cond),
+                    _ => return Err("inner fragments must only return placeholders and logic".into())
+                };
+                self.token(Token::CloseParen).map(|_| input)
+            },
+            Err(_) => {
+                let mut path = vec![first];
+                while let Ok(_) = self.token(Token::Period) {
+                    path.push(try!(self.identifier()));
+                }
+                Ok(InputType::Placeholder(path.into(), ContentType::String(false)))
+            },
+        }
+    }
+
+    pub fn string(&mut self) -> Result<StrTendril, Error> {
+        match self.tokenizer.peek() {
+            Some(Token::String(string)) => {
+                self.tokenizer.next();
+                Ok(string)
+            },
+            token => Err(ErrorKind::ExpectedString(token).into()),
+        }
+    }
+
+    pub fn identifier(&mut self) -> Result<StrTendril, Error> {
+        match self.tokenizer.peek() {
+            Some(Token::Ident(ident)) => {
+                self.tokenizer.next();
+                Ok(ident)
+            },
+            token => Err(ErrorKind::ExpectedIdentifier(token).into()),
+        }
+    }
+
+    pub fn path(&mut self) -> Result<Path, Error> {
+        let mut path = vec![try!(self.identifier())];
+        while let Ok(_) = self.token(Token::Period) {
+            path.push(try!(self.identifier()));
+        }
+        Ok(path.into())
+    }
+
+    pub fn token(&mut self, token: Token) -> Result<(), Error> {
+        match self.tokenizer.peek() {
+            Some(ref t) if t == &token => {
+                self.tokenizer.next();
+                Ok(())
+            },
+            found => Err(ErrorKind::ExpectedToken(token, found).into()),
+        }
+    }
+
+    fn outer_fragment(&mut self) -> Result<ReturnType, Error> {
+        let first = try!(self.identifier());
+        match self.token(Token::OpenParen) {
+            Ok(_) => {
+                let ret = try!(eval_fragment(&first, self));
+                self.token(Token::CloseParen).map(|_| ret)
+            },
+            Err(_) => {
+                let mut path = vec![first];
+                while let Ok(_) = self.token(Token::Period) {
+                    path.push(try!(self.identifier()));
+                }
+                Ok(ReturnType::Placeholder(path.into(), ContentType::String(false)))
+            },
+        }
     }
 }

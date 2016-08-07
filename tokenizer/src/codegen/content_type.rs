@@ -2,7 +2,8 @@ use std::collections::hash_map::{HashMap, Entry};
 use std::ops::{Deref, DerefMut};
 use std::fmt;
 
-use {StrTendril, Path};
+use codegen::Path;
+use StrTendril;
 
 ///Logic expressions.
 #[derive(Debug)]
